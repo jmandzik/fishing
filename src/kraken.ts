@@ -88,8 +88,8 @@ export function updateKraken(kraken: KrakenState, t: number, _dt: number, _bound
 
   switch (kraken.phase) {
     case 'rising': {
-      // Tentacle rises from pond floor toward the fish over 800ms
-      const dur = 800;
+      // Tentacle rises from pond floor toward the fish over 1600ms
+      const dur = 1600;
       const prog = Math.min(elapsed / dur, 1);
       const ease = prog * prog; // ease-in
       kraken.tipX = kraken.baseX + (fish.x - kraken.baseX) * ease;
@@ -104,8 +104,8 @@ export function updateKraken(kraken: KrakenState, t: number, _dt: number, _bound
       break;
     }
     case 'grabbing': {
-      // Brief pause while wrapping around the fish — 300ms
-      const dur = 300;
+      // Brief pause while wrapping around the fish — 800ms
+      const dur = 800;
       kraken.tipX = kraken.grabX;
       kraken.tipY = kraken.grabY;
 
@@ -122,8 +122,8 @@ export function updateKraken(kraken: KrakenState, t: number, _dt: number, _bound
       break;
     }
     case 'pulling': {
-      // Drag the fish down to the pond floor over 600ms
-      const dur = 600;
+      // Drag the fish down to the pond floor over 1200ms
+      const dur = 1200;
       const prog = Math.min(elapsed / dur, 1);
       const ease = prog * (2 - prog); // ease-out
 
@@ -256,27 +256,30 @@ export function drawKraken(ctx: CanvasRenderingContext2D, kraken: KrakenState, t
     ctx.fillStyle = '#F0AAC0';
   }
 
-  // Curling tip
+  // Curling tip — wraps snugly around the fish
   if (phase === 'grabbing' || phase === 'pulling') {
-    const curl = Math.sin(t * 0.01) * 0.5;
     const tip = points[segments];
+    const squeeze = Math.sin(t * 0.01) * 0.5;
+
+    // Tight wrap coming from the right, curling over the top and tucking under
     ctx.strokeStyle = '#E8668A';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.moveTo(tip.x, tip.y);
-    ctx.quadraticCurveTo(
-      tip.x + 8 + curl * 3, tip.y - 4,
-      tip.x + 5 + curl * 2, tip.y - 10
-    );
+    ctx.moveTo(tip.x + 1, tip.y);
+    ctx.quadraticCurveTo(tip.x + 7 + squeeze, tip.y - 2, tip.x + 6, tip.y - 6);
+    ctx.quadraticCurveTo(tip.x + 3, tip.y - 9 - squeeze, tip.x - 3, tip.y - 7);
+    ctx.quadraticCurveTo(tip.x - 7 - squeeze, tip.y - 4, tip.x - 5, tip.y);
+    ctx.quadraticCurveTo(tip.x - 3, tip.y + 2 + squeeze, tip.x, tip.y + 1);
     ctx.stroke();
 
-    // Second wrap
+    // Highlight
+    ctx.strokeStyle = '#F0AAC0';
+    ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(tip.x, tip.y);
-    ctx.quadraticCurveTo(
-      tip.x - 6 - curl * 3, tip.y - 3,
-      tip.x - 4 - curl * 2, tip.y - 8
-    );
+    ctx.moveTo(tip.x + 1, tip.y);
+    ctx.quadraticCurveTo(tip.x + 6 + squeeze, tip.y - 2, tip.x + 5, tip.y - 5);
+    ctx.quadraticCurveTo(tip.x + 2, tip.y - 8 - squeeze, tip.x - 3, tip.y - 6);
     ctx.stroke();
   }
 
