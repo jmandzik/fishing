@@ -1,3 +1,4 @@
+import { inject } from '@vercel/analytics';
 import { drawPond, drawDecorations, getPondBounds, getHidingSpots } from './pond.ts';
 import { createKoi, updateKoi, drawKoi, tryBreed, spawnHearts, updateHearts, drawHearts, type Temperament } from './koi.ts';
 import { spawnBubblesRandomly, updateBubbles, drawBubbles } from './bubbles.ts';
@@ -26,6 +27,9 @@ import { updateTadpoles, drawTadpoles } from './tadpoles.ts';
 import { createBaitState, handleBaitClick, drawBaitToggle } from './bait.ts';
 import { hapticTap, flushHaptics } from './haptics.ts';
 import { createKrakenState, handleDinoEyeClick, updateKraken, drawKraken } from './kraken.ts';
+
+// Initialize Vercel Web Analytics
+inject();
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
