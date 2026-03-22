@@ -41,6 +41,10 @@ function resize() {
   canvas.height = H;
   canvas.style.width = `${window.innerWidth}px`;
   canvas.style.height = `${window.innerHeight}px`;
+  // Crisp pixel text — disable anti-aliasing after resize resets context state
+  ctx.imageSmoothingEnabled = false;
+  (ctx as unknown as Record<string, boolean>).mozImageSmoothingEnabled = false;
+  (ctx as unknown as Record<string, boolean>).webkitImageSmoothingEnabled = false;
 }
 
 resize();
@@ -146,6 +150,106 @@ window.addEventListener('keyup', (e) => {
   if (fishingState.charging) {
     releaseCharge(fishingState, bounds, lastTime, W, H);
   }
+});
+
+// --- Touch support (mobile) ---
+let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+let touchStartedCharge = false;
+
+function handleTouchDown(x: number, y: number) {
+  initAudio();
+  playAmbient();
+
+  mouseDownX = x;
+  mouseDownY = y;
+  mouseIsDown = true;
+  clickConsumedByUI = false;
+  touchStartedCharge = false;
+
+  // UI priority chain — same as mousedown
+  if (handleSettingsClick(settings, x, y, W, H)) { clickConsumedByUI = true; return; }
+  if (handleShopClick(shop, fishingState, x, y, W, H)) { clickConsumedByUI = true; return; }
+  if (handleBaitClick(baitState, x, y, W, H)) { clickConsumedByUI = true; return; }
+  if (clickFrog(x, y, W, H, lastTime)) return;
+  if (heron.state === 'hovering' || heron.state === 'diving') {
+    scareHeron(heron, lastTime);
+  }
+  if (handleDinoEyeClick(krakenState, x, y, W, H, lastTime, fish, bounds)) { clickConsumedByUI = true; return; }
+  const fmPos = getPondBounds(W, H);
+  const fishermanX = fmPos.right + 8;
+  const fishermanY = fmPos.waterTop - 5;
+  if (Math.hypot(x - fishermanX, y - fishermanY) < 15) {
+    fishingState.clickReaction = lastTime;
+  }
+
+  // Long-press timer: after 300ms, start fishing actions
+  longPressTimer = setTimeout(() => {
+    longPressTimer = null;
+    if (clickConsumedByUI) return;
+    if (fishingState.reeling) {
+      // During tug-of-war, long-press does nothing extra (taps handle reeling)
+    } else if (fishingState.active) {
+      reelIn(fishingState, lastTime, chest);
+    } else if (!fishingState.charging && !fishingState.casting) {
+      startCharge(fishingState, lastTime);
+      touchStartedCharge = true;
+    }
+  }, 300);
+}
+
+function handleTouchUp(_x: number, y: number) {
+  const wasShortTap = longPressTimer !== null;
+  if (longPressTimer !== null) {
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+  }
+
+  if (!mouseIsDown) return;
+  mouseIsDown = false;
+
+  // If we were charging a cast, release it
+  if (touchStartedCharge && fishingState.charging) {
+    releaseCharge(fishingState, bounds, lastTime, W, H);
+    touchStartedCharge = false;
+    return;
+  }
+  touchStartedCharge = false;
+
+  if (clickConsumedByUI) return;
+  if (isShopOpen(shop) || isSettingsOpen(settings)) return;
+
+  // Short tap actions
+  if (wasShortTap) {
+    if (fishingState.reeling) {
+      reelClick(fishingState, lastTime, chest, catfish);
+    } else if (y >= bounds.waterTop) {
+      dropPellet(mouseDownX, mouseDownY, bounds);
+    }
+  }
+}
+
+canvas.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  const touch = e.touches[0];
+  handleTouchDown(touch.clientX / PIXEL_SCALE, touch.clientY / PIXEL_SCALE);
+}, { passive: false });
+
+canvas.addEventListener('touchend', (e) => {
+  e.preventDefault();
+  const touch = e.changedTouches[0];
+  handleTouchUp(touch.clientX / PIXEL_SCALE, touch.clientY / PIXEL_SCALE);
+}, { passive: false });
+
+canvas.addEventListener('touchcancel', () => {
+  if (longPressTimer !== null) {
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+  }
+  if (fishingState.charging) {
+    fishingState.charging = false;
+  }
+  touchStartedCharge = false;
+  mouseIsDown = false;
 });
 
 // Right click to spawn a fish — cycles through temperaments

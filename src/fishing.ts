@@ -984,7 +984,8 @@ export function drawFisherman(ctx: CanvasRenderingContext2D, state: FishingState
     const elapsed = Math.min(t - state.chargeStart, 2000);
     const power = elapsed / 2000;
     const barH = 16;
-    const barX = fx + 10;
+    // Position to the left of the fisherman so it stays on-screen on narrow displays
+    const barX = Math.min(fx + 10, w - 6);
     const barY = fy - 17;
 
     ctx.fillStyle = 'rgba(0,0,0,0.5)';

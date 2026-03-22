@@ -912,7 +912,7 @@ export function drawDecorations(ctx: CanvasRenderingContext2D, w: number, h: num
 
   // --- Log resting on the floor --- bigger, near bottom center
   const logX = b.centerX + pondW * 0.05;
-  const logHalf = 25;
+  const logHalf = Math.min(25, pondW * 0.15);
   const logLeftFloor = getBowlFloorY(logX - logHalf, b);
   const logRightFloor = getBowlFloorY(logX + logHalf, b);
   const logY = Math.min(logLeftFloor, logRightFloor);

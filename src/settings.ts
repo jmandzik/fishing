@@ -33,7 +33,7 @@ export function drawSettingsButton(ctx: CanvasRenderingContext2D, w: number, h: 
 
   // Gear icon (simple)
   ctx.fillStyle = '#AAAAAA';
-  ctx.font = 'bold 7px sans-serif';
+  ctx.font = 'bold 7px monospace';
   ctx.fillText('\u2699', btn.x + 4, btn.y + 8); // ⚙
 }
 
@@ -67,7 +67,7 @@ export function drawSettings(ctx: CanvasRenderingContext2D, settings: SettingsSt
 
   // Title
   ctx.fillStyle = '#FFFFFF';
-  ctx.font = 'bold 7px sans-serif';
+  ctx.font = 'bold 7px monospace';
   ctx.fillText('Sounds', panelX + 5, panelY + 10);
 
   // Toggles
@@ -88,7 +88,7 @@ export function drawSettings(ctx: CanvasRenderingContext2D, settings: SettingsSt
 
     // Label
     ctx.fillStyle = enabled ? '#FFFFFF' : '#777777';
-    ctx.font = '6px sans-serif';
+    ctx.font = '6px monospace';
     ctx.fillText(item.label, panelX + 14, iy + 6);
   }
 

@@ -83,15 +83,16 @@ export function drawShopButton(ctx: CanvasRenderingContext2D, w: number, h: numb
 
   // Text
   ctx.fillStyle = '#FFD700';
-  ctx.font = 'bold 8px sans-serif';
+  ctx.font = 'bold 8px monospace';
   ctx.fillText('SHOP', btn.x + 3, btn.y + 8);
 }
 
 export function drawShop(ctx: CanvasRenderingContext2D, shop: ShopState, fishingState: FishingState, w: number, h: number): void {
   if (!shop.open) return;
 
-  const panelX = Math.floor(w * 0.6);
-  const panelW = w - panelX;
+  // On narrow screens (portrait/mobile), use more width; on wide screens, use right 40%
+  const panelW = w < 200 ? w - 8 : Math.floor(w * 0.4);
+  const panelX = w - panelW;
 
   // Semi-transparent overlay
   ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
@@ -104,12 +105,12 @@ export function drawShop(ctx: CanvasRenderingContext2D, shop: ShopState, fishing
 
   // Title
   ctx.fillStyle = '#FFD700';
-  ctx.font = 'bold 10px sans-serif';
+  ctx.font = 'bold 10px monospace';
   ctx.fillText('SHOP', panelX + 8, 14);
 
   // Coins display
   ctx.fillStyle = '#FFD700';
-  ctx.font = 'bold 7px sans-serif';
+  ctx.font = 'bold 7px monospace';
   ctx.fillText(`Coins: ${fishingState.totalCoins}`, panelX + 8, 24);
 
   // Divider
@@ -120,9 +121,10 @@ export function drawShop(ctx: CanvasRenderingContext2D, shop: ShopState, fishing
   ctx.lineTo(panelX + panelW - 6, 28);
   ctx.stroke();
 
-  // Items
+  // Items — scale item height to fit all items with some breathing room
   const itemStartY = 34;
-  const itemH = 32;
+  const availableH = h - itemStartY - 20;
+  const itemH = Math.min(32, Math.floor(availableH / shop.items.length));
 
   for (let i = 0; i < shop.items.length; i++) {
     const item = shop.items[i];
@@ -145,24 +147,26 @@ export function drawShop(ctx: CanvasRenderingContext2D, shop: ShopState, fishing
 
     // Item name
     ctx.fillStyle = item.purchased ? '#66CC66' : '#FFFFFF';
-    ctx.font = 'bold 7px sans-serif';
+    ctx.font = 'bold 7px monospace';
     ctx.fillText(item.name, panelX + 7, iy + 10);
 
-    // Cost or OWNED
+    // Cost or OWNED — right-aligned
     if (item.purchased) {
       ctx.fillStyle = '#66CC66';
-      ctx.font = 'bold 6px sans-serif';
+      ctx.font = 'bold 6px monospace';
       ctx.fillText('OWNED', panelX + panelW - 35, iy + 10);
     } else {
       ctx.fillStyle = fishingState.totalCoins >= item.cost ? '#FFD700' : '#886644';
-      ctx.font = 'bold 6px sans-serif';
+      ctx.font = 'bold 6px monospace';
       ctx.fillText(`${item.cost} coins`, panelX + panelW - 38, iy + 10);
     }
 
-    // Description
-    ctx.fillStyle = '#BBBBBB';
-    ctx.font = '6px sans-serif';
-    ctx.fillText(item.description, panelX + 7, iy + 21);
+    // Description — only if items are tall enough
+    if (itemH >= 22) {
+      ctx.fillStyle = '#BBBBBB';
+      ctx.font = '6px monospace';
+      ctx.fillText(item.description, panelX + 7, iy + 21);
+    }
   }
 }
 
@@ -179,7 +183,8 @@ export function handleShopClick(shop: ShopState, fishingState: FishingState, x: 
 
   // If shop is open, handle panel clicks
   if (shop.open) {
-    const panelX = Math.floor(w * 0.6);
+    const panelW = w < 200 ? w - 8 : Math.floor(w * 0.4);
+    const panelX = w - panelW;
 
     // Click outside panel closes shop
     if (x < panelX) {
@@ -188,19 +193,19 @@ export function handleShopClick(shop: ShopState, fishingState: FishingState, x: 
     }
 
     // Check item clicks
-    const itemStartY = 36;
-    const itemH = 28;
+    const itemStartY = 34;
+    const availableH = h - itemStartY - 20;
+    const itemH = Math.min(32, Math.floor(availableH / shop.items.length));
 
     for (let i = 0; i < shop.items.length; i++) {
       const iy = itemStartY + i * itemH;
-      if (x >= panelX + 4 && x <= panelX + (w - panelX) - 4 && y >= iy && y <= iy + itemH - 3) {
+      if (x >= panelX + 4 && x <= panelX + panelW - 4 && y >= iy && y <= iy + itemH - 3) {
         tryBuyItem(shop, i, fishingState);
         return true;
       }
     }
 
     // Click was inside panel but not on an item - still consume it
-    void h;
     return true;
   }
 
