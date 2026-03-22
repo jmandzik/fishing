@@ -24,6 +24,7 @@ import { updateButterflies, drawFlowers, drawButterflies } from './butterflies.t
 import { updateDucks, drawDucks } from './ducks.ts';
 import { updateTadpoles, drawTadpoles } from './tadpoles.ts';
 import { createBaitState, handleBaitClick, drawBaitToggle } from './bait.ts';
+import { hapticTap, flushHaptics } from './haptics.ts';
 import { createKrakenState, handleDinoEyeClick, updateKraken, drawKraken } from './kraken.ts';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -64,6 +65,7 @@ let mouseIsDown = false;
 let clickConsumedByUI = false;
 
 canvas.addEventListener('mousedown', (e) => {
+  flushHaptics();
   initAudio();
   playAmbient();
 
@@ -116,7 +118,7 @@ canvas.addEventListener('mouseup', (e) => {
 
   if (e.button === 0 && y >= bounds.waterTop) {
     // Left-clicked in the water — drop food (works even while fishing)
-    dropPellet(mouseDownX, mouseDownY, bounds);
+    dropPellet(mouseDownX, mouseDownY, bounds); hapticTap();
   }
 });
 
@@ -157,6 +159,7 @@ let longPressTimer: ReturnType<typeof setTimeout> | null = null;
 let touchStartedCharge = false;
 
 function handleTouchDown(x: number, y: number) {
+  flushHaptics();
   initAudio();
   playAmbient();
 
@@ -198,6 +201,7 @@ function handleTouchDown(x: number, y: number) {
 }
 
 function handleTouchUp(_x: number, y: number) {
+  flushHaptics();
   const wasShortTap = longPressTimer !== null;
   if (longPressTimer !== null) {
     clearTimeout(longPressTimer);
@@ -223,7 +227,7 @@ function handleTouchUp(_x: number, y: number) {
     if (fishingState.reeling) {
       reelClick(fishingState, lastTime, chest, catfish);
     } else if (y >= bounds.waterTop) {
-      dropPellet(mouseDownX, mouseDownY, bounds);
+      dropPellet(mouseDownX, mouseDownY, bounds); hapticTap();
     }
   }
 }

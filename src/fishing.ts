@@ -8,6 +8,7 @@ import type { Turtle } from './turtle.ts';
 import type { Catfish } from './catfish.ts';
 import { spawnSplash } from './splash.ts';
 import { playCast, playBite, playCatch, playSnap, playCoins, playSplash } from './sounds.ts';
+import { hapticTap, hapticBite, hapticCatch, hapticSnap, hapticCoins } from './haptics.ts';
 import { hasEffect } from './shop.ts';
 import { isNighttime } from './daycycle.ts';
 import { getWeatherState } from './weather.ts';
@@ -212,7 +213,7 @@ export function releaseCharge(state: FishingState, bounds: PondBounds, t: number
   const bobberX = minX - power * (minX - maxX);
 
   // Start cast animation instead of immediately activating
-  playCast();
+  playCast(); hapticBite();
   state.casting = true;
   state.castAnimStart = t;
   state.castPower = power;
@@ -274,6 +275,7 @@ export function reelClick(state: FishingState, t: number, chest?: TreasureChest,
   if (!state.reelingFish && !state.reelingChest) return;
 
   state.reelClicks++;
+  hapticTap();
   state.tension += state.reelingChest ? 0.05 : 0.08; // chest is heavier, less tension per click
   state.reelProgress = state.reelClicks / state.reelClicksNeeded;
 
@@ -294,8 +296,8 @@ export function reelClick(state: FishingState, t: number, chest?: TreasureChest,
       chest.respawnAfter = t + 30000 + Math.random() * 30000;
       spawnSplash(state.bobberX, state.bobberY);
       playSplash();
-      playCatch();
-      playCoins();
+      playCatch(); hapticCatch();
+      playCoins(); hapticCoins();
     } else if (state.reelingFish) {
       // 1% chance: boot instead of fish!
       if (Math.random() < 0.01) {
@@ -331,8 +333,8 @@ export function reelClick(state: FishingState, t: number, chest?: TreasureChest,
         state.totalCoins += coinReward;
         spawnSplash(state.bobberX, state.bobberY);
         playSplash();
-        playCatch();
-        playCoins();
+        playCatch(); hapticCatch();
+        playCoins(); hapticCoins();
       }
     }
     state.reelingFish = null;
@@ -402,7 +404,7 @@ export function updateFishing(state: FishingState, bounds: PondBounds, t: number
       }
       state.lineBroke = true;
       state.brokeTime = t;
-      playSnap();
+      playSnap(); hapticSnap();
       state.bobberDip = 0;
       return;
     }
@@ -417,6 +419,20 @@ export function updateFishing(state: FishingState, bounds: PondBounds, t: number
     // Hook rises toward surface as you reel
     const surfaceY = bounds.waterTop + 5;
     state.hookY = state.hookY + (surfaceY - state.hookY) * state.reelProgress * 0.03 * (dt / 16);
+
+    // Fish tracks the hook position
+    const isCatfishProxy = state.reelingFish.id === -99;
+    state.reelingFish.x = state.hookX;
+    state.reelingFish.y = state.hookY;
+    state.reelingFish.vx = 0;
+    state.reelingFish.vy = 0;
+    // Move the real catfish visual too
+    if (isCatfishProxy && catfish) {
+      catfish.x = state.hookX;
+      catfish.y = state.hookY;
+      catfish.vx = 0;
+      catfish.vy = 0;
+    }
 
     // Tension decays slowly (line relaxes over time)
     state.tension -= 0.0008 * (dt / 16);
@@ -433,7 +449,7 @@ export function updateFishing(state: FishingState, bounds: PondBounds, t: number
     // Bobber shakes while fighting
     state.bobberDip = Math.sin(t * 0.025) * 2 + Math.sin(t * 0.06) * 1;
 
-    // Line snaps!
+    // Line snaps — fish stays where it is and swims back naturally
     const fishSnapThreshold = hasEffect('strong_line') ? 1.3 : 1;
     if (state.tension >= fishSnapThreshold) {
       state.reeling = false;
@@ -441,7 +457,7 @@ export function updateFishing(state: FishingState, bounds: PondBounds, t: number
       state.lineBroke = true;
       state.brokeTime = t;
       state.bobberDip = 0;
-      playSnap();
+      playSnap(); hapticSnap();
       return;
     }
 
@@ -603,7 +619,7 @@ export function updateFishing(state: FishingState, bounds: PondBounds, t: number
       state.nibbling = proxy;
       state.biting = true;
       state.biteStart = t;
-      playBite();
+      playBite(); hapticBite();
     }
   }
 
@@ -628,7 +644,7 @@ export function updateFishing(state: FishingState, bounds: PondBounds, t: number
     } else if (t - state.nibbleStart > nibbleDuration) {
       state.biting = true;
       state.biteStart = t;
-      playBite();
+      playBite(); hapticBite();
     }
     state.bobberDip = Math.sin(t * 0.02) * 1.5;
   }
