@@ -1,8 +1,10 @@
 // A single turtle that swims slowly, hunts fish when hungry, and surfaces for air
 
 import type { PondBounds } from './pond.ts';
-import { isInWater } from './pond.ts';
+import { isInWater, getBowlFloorY } from './pond.ts';
 import type { Koi } from './koi.ts';
+import { isNighttime } from './daycycle.ts';
+import { spawnBubble } from './bubbles.ts';
 
 export interface Turtle {
   x: number;
@@ -24,6 +26,10 @@ export interface Turtle {
   eating: boolean;
   eatStart: number;
   eatingFish: { x: number; y: number; size: number; color: string; accentColor: string } | null;
+  // Sleeping at night
+  sleeping: boolean;
+  lastSleepBubble: number;
+  sleepTransition: number; // 0 = awake, 1 = fully asleep
 }
 
 // Bone particles that fly out when turtle eats
@@ -99,11 +105,14 @@ export function createTurtle(bounds: PondBounds): Turtle {
     surfacing: false,
     breathing: false,
     breathUntil: 0,
-    size: 40,
+    size: 27,
     legPhase: 0,
     eating: false,
     eatStart: 0,
     eatingFish: null,
+    sleeping: false,
+    lastSleepBubble: 0,
+    sleepTransition: 0,
   };
 }
 
@@ -123,7 +132,57 @@ function pickTarget(turtle: Turtle, bounds: PondBounds) {
 }
 
 export function updateTurtle(turtle: Turtle, bounds: PondBounds, t: number, dt: number, fish: Koi[]) {
-  // Hunger increases over time
+  const night = isNighttime(t);
+
+  // --- Night sleeping behavior ---
+  if (night && !turtle.sleeping && !turtle.eating) {
+    // Cancel any surfacing/breathing — head to the floor
+    turtle.surfacing = false;
+    turtle.breathing = false;
+
+    const floorY = getBowlFloorY(turtle.x, bounds) - turtle.size * 0.3;
+    turtle.targetX = turtle.x;
+    turtle.targetY = floorY;
+
+    // Check if we've reached the floor
+    if (Math.abs(turtle.y - floorY) < 3) {
+      turtle.sleeping = true;
+      turtle.vx = 0;
+      turtle.vy = 0;
+    }
+    turtle.sleepTransition = Math.min(turtle.sleepTransition + 0.002 * (dt / 16), 1);
+    // Fall through to movement code below, but skip hunting/breathing
+  }
+
+  if (turtle.sleeping) {
+    // Stay on the floor, don't move
+    turtle.vx = 0;
+    turtle.vy = 0;
+    turtle.sleepTransition = Math.min(turtle.sleepTransition + 0.005 * (dt / 16), 1);
+
+    // Occasional sleep bubbles (every 5-8 seconds)
+    if (t - turtle.lastSleepBubble > 5000 + Math.random() * 3000) {
+      const bx = turtle.x + (turtle.facingRight ? turtle.size * 0.5 : -turtle.size * 0.5);
+      spawnBubble(bx, turtle.y - turtle.size * 0.1);
+      turtle.lastSleepBubble = t;
+    }
+
+    // Wake up at dawn
+    if (!night) {
+      turtle.sleeping = false;
+      turtle.sleepTransition = 0;
+      turtle.lastBreathedAt = t; // reset so it doesn't immediately surface
+      pickTarget(turtle, bounds);
+    }
+    return;
+  }
+
+  // Wake transition: fade back to normal
+  if (!night && turtle.sleepTransition > 0) {
+    turtle.sleepTransition = Math.max(turtle.sleepTransition - 0.005 * (dt / 16), 0);
+  }
+
+  // Hunger increases over time (paused while sleeping)
   turtle.hunger = Math.min(turtle.hunger + 0.0003 * (dt / 16), 1);
 
   // --- Eating animation: pause and gulp for 600ms ---
@@ -139,12 +198,17 @@ export function updateTurtle(turtle: Turtle, bounds: PondBounds, t: number, dt: 
     return;
   }
 
-  turtle.legPhase = t * 0.003;
+  // Leg phase driven by actual movement speed
+  const speed = Math.sqrt(turtle.vx * turtle.vx + turtle.vy * turtle.vy);
+  turtle.legPhase += speed * 0.15 * (dt / 16);
 
-  // --- Breathing: surface every 60 seconds ---
+  // --- Breathing: surface every 60 seconds (skip at night) ---
   const timeSinceBreath = t - turtle.lastBreathedAt;
 
-  if (turtle.breathing) {
+  if (night) {
+    // Skip breathing/surfacing/hunting at night — just drift to floor
+    // Movement still runs below
+  } else if (turtle.breathing) {
     // Stay at surface until breathUntil
     turtle.targetY = bounds.waterTop + 4;
     turtle.vy *= 0.9;
@@ -166,15 +230,15 @@ export function updateTurtle(turtle: Turtle, bounds: PondBounds, t: number, dt: 
     return;
   }
 
-  if (!turtle.surfacing && timeSinceBreath > 60000) {
+  if (!night && !turtle.surfacing && timeSinceBreath > 60000) {
     turtle.surfacing = true;
     turtle.targetX = turtle.x + (Math.random() - 0.5) * 20;
     turtle.targetY = bounds.waterTop + 4;
   }
 
-  // --- Hunt fish when hungry ---
+  // --- Hunt fish when hungry (not at night) ---
   let hunting = false;
-  if (!turtle.surfacing && turtle.hunger > 0.3) {
+  if (!night && !turtle.surfacing && turtle.hunger > 0.3) {
     const huntRange = 50 + turtle.hunger * 80; // more aggressive when hungrier
     let closestDist = Infinity;
     let closestFish: Koi | null = null;
@@ -196,6 +260,17 @@ export function updateTurtle(turtle: Turtle, bounds: PondBounds, t: number, dt: 
       turtle.targetY = closestFish.y;
       hunting = true;
 
+      // Lunge burst when close to prey
+      if (closestDist < turtle.size * 0.8 && closestDist > turtle.size * 0.3) {
+        const lx = closestFish.x - turtle.x;
+        const ly = closestFish.y - turtle.y;
+        const ld = Math.sqrt(lx * lx + ly * ly);
+        if (ld > 0) {
+          turtle.vx += (lx / ld) * 0.8 * (dt / 16);
+          turtle.vy += (ly / ld) * 0.8 * (dt / 16);
+        }
+      }
+
       // Start eating the fish
       if (closestDist < turtle.size * 0.5 && t - turtle.lastAteAt > 3000 && !turtle.eating) {
         turtle.eating = true;
@@ -209,8 +284,25 @@ export function updateTurtle(turtle: Turtle, bounds: PondBounds, t: number, dt: 
         closestFish.alive = false;
         turtle.hunger = Math.max(turtle.hunger - 0.4, 0);
         turtle.lastAteAt = t;
-        turtle.size = Math.min(turtle.size + closestFish.size * 0.3, 60);
+        turtle.size = Math.min(turtle.size + closestFish.size * 0.3, 40);
         spawnBones(turtle.x + (turtle.facingRight ? turtle.size * 0.5 : -turtle.size * 0.5), turtle.y);
+
+        // Scatter nearby fish away from the turtle
+        for (const f of fish) {
+          if (!f.alive || f.dead || f === closestFish) continue;
+          const fdx = f.x - turtle.x;
+          const fdy = f.y - turtle.y;
+          const fd = Math.sqrt(fdx * fdx + fdy * fdy);
+          if (fd < 80 && fd > 0) {
+            const force = (1 - fd / 80) * 6;
+            f.vx += (fdx / fd) * force;
+            f.vy += (fdy / fd) * force;
+            // Also set their target away so AI doesn't steer them back
+            f.targetX = f.x + (fdx / fd) * 40;
+            f.targetY = f.y + (fdy / fd) * 30;
+            f.nextTargetTime = t + 2000; // don't pick a new target for 2s
+          }
+        }
       }
     }
   }
@@ -272,7 +364,8 @@ export function drawTurtle(ctx: CanvasRenderingContext2D, turtle: Turtle, t: num
   ctx.scale(dir, 1);
 
   const s = turtle.size;
-  const kick = Math.sin(turtle.legPhase + t * 0.004);
+  const sleepAmt = turtle.sleepTransition;
+  const kick = turtle.sleeping ? 0 : Math.sin(turtle.legPhase);
   const skinColor = '#5A8850';
   const skinLight = '#6A9A5A';
   const skinDark = '#3A6A30';
@@ -285,43 +378,48 @@ export function drawTurtle(ctx: CanvasRenderingContext2D, turtle: Turtle, t: num
   ctx.ellipse(0, s * 0.32, s * 0.45, s * 0.06, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // --- Tail (small, pointing back-up) ---
+  // --- Tail (small, pointing back-up — retracts when sleeping) ---
+  const tailScale = 1 - sleepAmt * 0.6;
   ctx.fillStyle = skinColor;
   ctx.beginPath();
   ctx.moveTo(-s * 0.38, s * 0.05);
-  ctx.quadraticCurveTo(-s * 0.55, -s * 0.02 + kick * s * 0.03, -s * 0.6, s * 0.0 + kick * s * 0.02);
-  ctx.quadraticCurveTo(-s * 0.55, s * 0.08 + kick * s * 0.02, -s * 0.38, s * 0.1);
+  ctx.quadraticCurveTo(-s * (0.38 + 0.17 * tailScale), -s * 0.02 + kick * s * 0.03, -s * (0.38 + 0.22 * tailScale), s * 0.0 + kick * s * 0.02);
+  ctx.quadraticCurveTo(-s * (0.38 + 0.17 * tailScale), s * 0.08 + kick * s * 0.02, -s * 0.38, s * 0.1);
   ctx.fill();
 
-  // --- Back leg (one visible in profile, hangs down and kicks) ---
+  // --- Back leg (anchored well into the body, spread apart from front) ---
+  // When sleeping, legs retract (shrink toward shell)
+  const legScale = 1 - sleepAmt * 0.8; // shrinks to 20% when asleep
   ctx.fillStyle = skinColor;
   ctx.save();
-  ctx.translate(-s * 0.2, s * 0.18);
+  ctx.translate(-s * 0.2, s * 0.04);
   ctx.rotate(0.3 + kick * 0.4);
+  ctx.scale(legScale, legScale);
   // Upper leg
   ctx.beginPath();
-  ctx.ellipse(0, s * 0.08, s * 0.07, s * 0.14, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, s * 0.1, s * 0.07, s * 0.14, 0, 0, Math.PI * 2);
   ctx.fill();
   // Webbed foot
   ctx.fillStyle = skinDark;
   ctx.beginPath();
-  ctx.ellipse(s * 0.02, s * 0.2, s * 0.09, s * 0.04, 0.3 + kick * 0.2, 0, Math.PI * 2);
+  ctx.ellipse(s * 0.02, s * 0.22, s * 0.09, s * 0.04, 0.3 + kick * 0.2, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 
-  // --- Front leg (larger flipper, hangs down) ---
+  // --- Front leg (further forward, anchored into the body) ---
   ctx.fillStyle = skinColor;
   ctx.save();
-  ctx.translate(s * 0.15, s * 0.18);
+  ctx.translate(s * 0.2, s * 0.04);
   ctx.rotate(-0.2 - kick * 0.35);
+  ctx.scale(legScale, legScale);
   // Upper leg
   ctx.beginPath();
-  ctx.ellipse(0, s * 0.1, s * 0.08, s * 0.16, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, s * 0.12, s * 0.08, s * 0.16, 0, 0, Math.PI * 2);
   ctx.fill();
   // Webbed foot / flipper
   ctx.fillStyle = skinDark;
   ctx.beginPath();
-  ctx.ellipse(s * 0.02, s * 0.24, s * 0.1, s * 0.045, -0.2 - kick * 0.15, 0, Math.PI * 2);
+  ctx.ellipse(s * 0.02, s * 0.26, s * 0.1, s * 0.045, -0.2 - kick * 0.15, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 
@@ -368,55 +466,70 @@ export function drawTurtle(ctx: CanvasRenderingContext2D, turtle: Turtle, t: num
   ctx.ellipse(-s * 0.05, -s * 0.1, s * 0.18, s * 0.08, 0.1, 0, Math.PI * 2);
   ctx.fill();
 
-  // --- Neck (extends forward from shell) ---
+  // --- Neck (extends forward from shell, retracts when sleeping) ---
+  const headRetract = sleepAmt * 0.35; // head pulls back into shell
+  const neckExtend = 1 - headRetract;
+
   ctx.fillStyle = skinColor;
   ctx.beginPath();
   ctx.moveTo(s * 0.35, -s * 0.02);
-  ctx.quadraticCurveTo(s * 0.5, -s * 0.06, s * 0.55, -s * 0.04);
-  ctx.quadraticCurveTo(s * 0.5, s * 0.06, s * 0.35, s * 0.1);
+  ctx.quadraticCurveTo(s * (0.35 + 0.15 * neckExtend), -s * 0.06, s * (0.35 + 0.2 * neckExtend), -s * 0.04);
+  ctx.quadraticCurveTo(s * (0.35 + 0.15 * neckExtend), s * 0.06, s * 0.35, s * 0.1);
   ctx.fill();
 
-  // --- Head (larger, rounder) ---
+  // --- Head (larger, rounder — pulls back when sleeping) ---
+  const headX = s * (0.35 + 0.27 * neckExtend);
   ctx.fillStyle = skinLight;
   ctx.beginPath();
-  ctx.ellipse(s * 0.62, 0, s * 0.12, s * 0.1, 0, 0, Math.PI * 2);
+  ctx.ellipse(headX, 0, s * 0.12, s * 0.1, 0, 0, Math.PI * 2);
   ctx.fill();
 
   // Jaw / chin slightly darker
   ctx.fillStyle = skinColor;
   ctx.beginPath();
-  ctx.ellipse(s * 0.64, s * 0.04, s * 0.09, s * 0.05, 0, 0, Math.PI);
+  ctx.ellipse(headX + s * 0.02, s * 0.04, s * 0.09, s * 0.05, 0, 0, Math.PI);
   ctx.fill();
 
-  // Eye
-  ctx.fillStyle = '#FFFFFF';
-  ctx.beginPath();
-  ctx.arc(s * 0.65, -s * 0.03, s * 0.04, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#111111';
-  ctx.beginPath();
-  ctx.arc(s * 0.67, -s * 0.03, s * 0.02, 0, Math.PI * 2);
-  ctx.fill();
+  // Eye — closed line when sleeping, open eye when awake
+  if (sleepAmt > 0.5) {
+    // Closed eye — horizontal line
+    ctx.strokeStyle = '#333333';
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(headX + s * 0.01, -s * 0.03);
+    ctx.lineTo(headX + s * 0.07, -s * 0.03);
+    ctx.stroke();
+  } else {
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.arc(headX + s * 0.03, -s * 0.03, s * 0.04, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#111111';
+    ctx.beginPath();
+    ctx.arc(headX + s * 0.05, -s * 0.03, s * 0.02, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   // Nostril
   ctx.fillStyle = skinDark;
   ctx.beginPath();
-  ctx.arc(s * 0.73, -s * 0.01, s * 0.01, 0, Math.PI * 2);
+  ctx.arc(headX + s * 0.11, -s * 0.01, s * 0.01, 0, Math.PI * 2);
   ctx.fill();
 
   // Mouth — chomping animation when eating
   if (turtle.eating) {
     const elapsed = t - turtle.eatStart;
     const chompOpen = Math.sin(elapsed * 0.03) > 0;
+    const mouthX = headX + s * 0.11;
 
     if (chompOpen) {
       // Open mouth
       ctx.fillStyle = '#2A1A0A';
       ctx.beginPath();
-      ctx.moveTo(s * 0.73, -s * 0.02);
-      ctx.lineTo(s * 0.78, -s * 0.04);
-      ctx.lineTo(s * 0.78, s * 0.04);
-      ctx.lineTo(s * 0.73, s * 0.04);
+      ctx.moveTo(mouthX, -s * 0.02);
+      ctx.lineTo(mouthX + s * 0.05, -s * 0.04);
+      ctx.lineTo(mouthX + s * 0.05, s * 0.04);
+      ctx.lineTo(mouthX, s * 0.04);
       ctx.closePath();
       ctx.fill();
     } else {
@@ -424,8 +537,8 @@ export function drawTurtle(ctx: CanvasRenderingContext2D, turtle: Turtle, t: num
       ctx.strokeStyle = skinDark;
       ctx.lineWidth = 0.8;
       ctx.beginPath();
-      ctx.moveTo(s * 0.68, s * 0.02);
-      ctx.lineTo(s * 0.76, s * 0.01);
+      ctx.moveTo(headX + s * 0.06, s * 0.02);
+      ctx.lineTo(mouthX + s * 0.03, s * 0.01);
       ctx.stroke();
     }
 
@@ -439,31 +552,31 @@ export function drawTurtle(ctx: CanvasRenderingContext2D, turtle: Turtle, t: num
       const fishScale = 1 - prog;
       if (fishScale > 0.05) {
         const fishSize = turtle.eatingFish.size * fishScale;
-        const fishX = s * 0.75 - prog * s * 0.1;
+        const fishDrawX = mouthX + s * 0.02 - prog * s * 0.1;
         ctx.fillStyle = turtle.eatingFish.color;
         ctx.globalAlpha = fishScale;
         ctx.beginPath();
-        ctx.ellipse(fishX, 0, fishSize, fishSize * 0.35, 0, 0, Math.PI * 2);
+        ctx.ellipse(fishDrawX, 0, fishSize, fishSize * 0.35, 0, 0, Math.PI * 2);
         ctx.fill();
         // Tail
         ctx.fillStyle = turtle.eatingFish.accentColor;
         ctx.beginPath();
-        ctx.moveTo(fishX - fishSize * 0.5, 0);
-        ctx.lineTo(fishX - fishSize, -fishSize * 0.3);
-        ctx.lineTo(fishX - fishSize, fishSize * 0.3);
+        ctx.moveTo(fishDrawX - fishSize * 0.5, 0);
+        ctx.lineTo(fishDrawX - fishSize, -fishSize * 0.3);
+        ctx.lineTo(fishDrawX - fishSize, fishSize * 0.3);
         ctx.closePath();
         ctx.fill();
         ctx.globalAlpha = 1;
       }
     }
     ctx.translate(-headBob, 0); // undo bob
-  } else {
-    // Normal mouth line
+  } else if (sleepAmt < 0.3) {
+    // Normal mouth line (hidden when mostly asleep)
     ctx.strokeStyle = skinDark;
     ctx.lineWidth = 0.6;
     ctx.beginPath();
-    ctx.moveTo(s * 0.68, s * 0.03);
-    ctx.lineTo(s * 0.73, s * 0.02);
+    ctx.moveTo(headX + s * 0.06, s * 0.03);
+    ctx.lineTo(headX + s * 0.11, s * 0.02);
     ctx.stroke();
   }
 
@@ -472,11 +585,23 @@ export function drawTurtle(ctx: CanvasRenderingContext2D, turtle: Turtle, t: num
     ctx.fillStyle = 'rgba(200, 230, 255, 0.5)';
     const bub = Math.sin(t * 0.01) * 2;
     ctx.beginPath();
-    ctx.arc(s * 0.75, -s * 0.15 + bub, 1.5, 0, Math.PI * 2);
+    ctx.arc(headX + s * 0.13, -s * 0.15 + bub, 1.5, 0, Math.PI * 2);
     ctx.fill();
     ctx.beginPath();
-    ctx.arc(s * 0.7, -s * 0.25 + bub * 0.7, 1, 0, Math.PI * 2);
+    ctx.arc(headX + s * 0.08, -s * 0.25 + bub * 0.7, 1, 0, Math.PI * 2);
     ctx.fill();
+  }
+
+  // --- Sleeping "zzz" ---
+  if (turtle.sleeping) {
+    const zBob = Math.sin(t * 0.003) * 2;
+    ctx.fillStyle = 'rgba(200, 220, 255, 0.6)';
+    ctx.font = '4px monospace';
+    ctx.fillText('z', headX + s * 0.05, -s * 0.18 + zBob);
+    ctx.font = '3px monospace';
+    ctx.fillText('z', headX + s * 0.12, -s * 0.28 + zBob * 0.7);
+    ctx.font = '2px monospace';
+    ctx.fillText('z', headX + s * 0.17, -s * 0.35 + zBob * 0.5);
   }
 
   ctx.restore();

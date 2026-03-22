@@ -5,7 +5,10 @@ import { getPondBounds, getBowlFloorY } from './pond.ts';
 import type { TreasureChest } from './treasure.ts';
 import type { Koi } from './koi.ts';
 import type { Turtle } from './turtle.ts';
+import type { Catfish } from './catfish.ts';
 import { spawnSplash } from './splash.ts';
+import { playCast, playBite, playCatch, playSnap, playCoins, playSplash } from './sounds.ts';
+import { hasEffect } from './shop.ts';
 
 export interface FishingState {
   // Fisherman position (computed from bounds)
@@ -65,6 +68,13 @@ export interface FishingState {
   reelingChest: boolean;
   caughtChest: boolean;     // for catch animation
 
+  // Reeling in empty (no fish)
+  reelingEmpty: boolean;
+  reelEmptyStart: number;
+  reelEmptyStartX: number;
+  reelEmptyStartY: number;
+  reelEmptyHookStartY: number;
+
   // Score
   totalCaught: number;
   biggestSize: number;
@@ -115,10 +125,15 @@ export function createFishingState(): FishingState {
     stealTime: 0,
     reelingChest: false,
     caughtChest: false,
+    reelingEmpty: false,
+    reelEmptyStart: 0,
+    reelEmptyStartX: 0,
+    reelEmptyStartY: 0,
+    reelEmptyHookStartY: 0,
     canCastAfter: 0,
     totalCaught: 0,
     biggestSize: 0,
-    totalCoins: 0,
+    totalCoins: 10,
   };
 }
 
@@ -138,7 +153,7 @@ function getFishermanPos(w: number, h: number) {
 }
 
 export function startCharge(state: FishingState, t: number) {
-  if (state.active || state.catching || state.casting || t < state.canCastAfter) return;
+  if (state.active || state.catching || state.casting || state.reelingEmpty || t < state.canCastAfter) return;
   state.charging = true;
   state.chargeStart = t;
 }
@@ -156,6 +171,7 @@ export function releaseCharge(state: FishingState, bounds: PondBounds, t: number
   const bobberX = minX - power * (minX - maxX);
 
   // Start cast animation instead of immediately activating
+  playCast();
   state.casting = true;
   state.castAnimStart = t;
   state.castPower = power;
@@ -199,16 +215,20 @@ export function reelIn(state: FishingState, t: number, chest?: TreasureChest) {
     state.biting = false;
     state.nibbling = null;
   } else {
-    // Nothing biting — just pull line out
+    // Nothing biting — smoothly reel in
+    state.reelingEmpty = true;
+    state.reelEmptyStart = t;
+    state.reelEmptyStartX = state.bobberX;
+    state.reelEmptyStartY = state.bobberY;
+    state.reelEmptyHookStartY = state.hookY;
     state.active = false;
     state.nibbling = null;
     state.biting = false;
-    state.canCastAfter = t + 500;
   }
 }
 
 /** Call this each time the player clicks during tug-of-war */
-export function reelClick(state: FishingState, t: number, chest?: TreasureChest) {
+export function reelClick(state: FishingState, t: number, chest?: TreasureChest, catfish?: Catfish) {
   if (!state.reeling) return;
   if (!state.reelingFish && !state.reelingChest) return;
 
@@ -232,16 +252,34 @@ export function reelClick(state: FishingState, t: number, chest?: TreasureChest)
       chest.hooked = false;
       chest.respawnAfter = t + 30000 + Math.random() * 30000;
       spawnSplash(state.bobberX, state.bobberY);
+      playSplash();
+      playCatch();
+      playCoins();
     } else if (state.reelingFish) {
       // Landed a fish!
       state.caughtChest = false;
       state.caughtFish = state.reelingFish;
       state.caughtFish.alive = false;
-      state.totalCaught++;
+
+      // If this is the catfish proxy, kill the real catfish too
+      const isCatfish = state.caughtFish.id === -99;
+      if (isCatfish && catfish) {
+        catfish.alive = false;
+      }
+
+      const catchValue = isCatfish ? 3 : (state.caughtFish.temperament === 'golden' ? 2 : 1);
+      state.totalCaught += catchValue;
       if (state.caughtFish.size > state.biggestSize) {
         state.biggestSize = state.caughtFish.size;
       }
+      // Coins: catfish worth 5, golden doubles, others based on size
+      const coinReward = isCatfish ? 5 :
+        Math.max(1, Math.floor(state.caughtFish.size / 5)) * (state.caughtFish.temperament === 'golden' ? 2 : 1);
+      state.totalCoins += coinReward;
       spawnSplash(state.bobberX, state.bobberY);
+      playSplash();
+      playCatch();
+      playCoins();
     }
     state.reelingFish = null;
     state.reelingChest = false;
@@ -253,12 +291,32 @@ const ROD_SWING_MS = 350;   // rod swings back then forward
 const BOBBER_FLY_MS = 400;  // bobber arcs through the air
 const CAST_TOTAL_MS = ROD_SWING_MS + BOBBER_FLY_MS;
 
-export function updateFishing(state: FishingState, bounds: PondBounds, t: number, dt: number, fish: Koi[], turtle: Turtle, w: number, h: number, chest: TreasureChest) {
+export function updateFishing(state: FishingState, bounds: PondBounds, t: number, dt: number, fish: Koi[], turtle: Turtle, w: number, h: number, chest: TreasureChest, catfish?: Catfish) {
   // --- Line broke message ---
   if (state.lineBroke) {
     if (t - state.brokeTime > 1500) {
       state.lineBroke = false;
       state.canCastAfter = t + 500;
+    }
+    return;
+  }
+
+  // --- Reeling in empty (smooth pull back to rod) ---
+  if (state.reelingEmpty) {
+    const elapsed = t - state.reelEmptyStart;
+    const duration = 600; // 600ms to reel back
+    const prog = Math.min(elapsed / duration, 1);
+    const ease = prog * (2 - prog); // ease-out
+
+    const pos = getFishermanPos(w, h);
+    state.bobberX = state.reelEmptyStartX + (pos.rodTipX - state.reelEmptyStartX) * ease;
+    state.bobberY = state.reelEmptyStartY + (pos.rodTipY - state.reelEmptyStartY) * ease;
+    state.hookX = state.bobberX;
+    state.hookY = state.reelEmptyHookStartY + (pos.rodTipY - state.reelEmptyHookStartY) * ease;
+
+    if (prog >= 1) {
+      state.reelingEmpty = false;
+      state.canCastAfter = t + 300;
     }
     return;
   }
@@ -275,12 +333,14 @@ export function updateFishing(state: FishingState, bounds: PondBounds, t: number
     state.bobberDip = Math.sin(t * 0.02) * 1.5;
 
     // Line snaps (clicked too fast)
-    if (state.tension >= 1) {
+    const chestSnapThreshold = hasEffect('strong_line') ? 1.3 : 1;
+    if (state.tension >= chestSnapThreshold) {
       state.reeling = false;
       state.reelingChest = false;
       if (chest) chest.hooked = false;
       state.lineBroke = true;
       state.brokeTime = t;
+      playSnap();
       state.bobberDip = 0;
       return;
     }
@@ -312,12 +372,14 @@ export function updateFishing(state: FishingState, bounds: PondBounds, t: number
     state.bobberDip = Math.sin(t * 0.025) * 2 + Math.sin(t * 0.06) * 1;
 
     // Line snaps!
-    if (state.tension >= 1) {
+    const fishSnapThreshold = hasEffect('strong_line') ? 1.3 : 1;
+    if (state.tension >= fishSnapThreshold) {
       state.reeling = false;
       state.reelingFish = null;
       state.lineBroke = true;
       state.brokeTime = t;
       state.bobberDip = 0;
+      playSnap();
       return;
     }
 
@@ -381,6 +443,7 @@ export function updateFishing(state: FishingState, bounds: PondBounds, t: number
       state.caughtFish = null;
 
       spawnSplash(state.castTargetX, bounds.waterTop);
+      playSplash();
     }
     return;
   }
@@ -420,7 +483,8 @@ export function updateFishing(state: FishingState, bounds: PondBounds, t: number
   if (!state.nibbling && !state.biting && !state.turtleStealing) {
     const floorY = getBowlFloorY(state.hookX, bounds) - 3;
     if (state.hookY < floorY) {
-      state.hookY += 0.15 * (dt / 16);
+      const sinkSpeed = hasEffect('deep_hook') ? 0.4 : 0.15;
+      state.hookY += sinkSpeed * (dt / 16);
     }
   }
 
@@ -456,7 +520,31 @@ export function updateFishing(state: FishingState, bounds: PondBounds, t: number
     return;
   }
 
-  // Fish near hook
+  // Catfish near hook — treat as a special bite (goes straight to biting)
+  if (!state.nibbling && !state.biting && catfish && catfish.alive) {
+    const cd = Math.hypot(catfish.x - state.hookX, catfish.y - state.hookY);
+    if (cd < 12) {
+      // Catfish bites hard and immediately — create a proxy koi
+      const proxy: Koi = {
+        x: catfish.x, y: catfish.y, vx: 0, vy: 0,
+        targetX: catfish.x, targetY: catfish.y,
+        facingRight: catfish.facingRight,
+        color: '#5A4A3A', accentColor: '#4A3A2A',
+        size: catfish.size, tailPhase: 0, nextTargetTime: 0,
+        alive: true, temperament: 'neutral',
+        hunger: 0, lastAteAt: 0, chompUntil: 0,
+        hidingUntil: 0, lastBredAt: 0,
+        starvingSince: 0, dead: false, deadSince: 0,
+        bornAt: 0, id: -99, parentIds: [],
+      };
+      state.nibbling = proxy;
+      state.biting = true;
+      state.biteStart = t;
+      playBite();
+    }
+  }
+
+  // Regular fish near hook
   if (!state.nibbling && !state.biting) {
     for (const f of fish) {
       if (!f.alive || f.dead) continue;
@@ -477,6 +565,7 @@ export function updateFishing(state: FishingState, bounds: PondBounds, t: number
     } else if (t - state.nibbleStart > nibbleDuration) {
       state.biting = true;
       state.biteStart = t;
+      playBite();
     }
     state.bobberDip = Math.sin(t * 0.02) * 1.5;
   }
@@ -495,11 +584,13 @@ export function updateFishing(state: FishingState, bounds: PondBounds, t: number
     state.bobberDip = 0;
   }
 
-  // Attract nearby hungry fish
+  // Attract nearby hungry fish (only if they can eat)
   for (const f of fish) {
     if (!f.alive || f.dead) continue;
+    if (t - f.lastAteAt < 15000) continue; // still digesting
     const d = Math.hypot(f.x - state.hookX, f.y - state.hookY);
-    if (d < 40 && d > 5 && f.hunger > 0.3) {
+    const attractRange = hasEffect('better_bait') ? 60 : 40;
+    if (d < attractRange && d > 5 && f.hunger > 0.3) {
       f.targetX = state.hookX;
       f.targetY = state.hookY;
     }
@@ -696,8 +787,8 @@ export function drawFisherman(ctx: CanvasRenderingContext2D, state: FishingState
     ctx.stroke();
   }
 
-  // --- Fishing line from rod tip to bobber (when active) ---
-  if (state.active || state.catching) {
+  // --- Fishing line from rod tip to bobber ---
+  if (state.active || state.catching || state.reelingEmpty) {
     const bobberY = state.bobberY + state.bobberDip;
 
     ctx.strokeStyle = '#888888';
@@ -841,7 +932,7 @@ export function drawFishing(ctx: CanvasRenderingContext2D, state: FishingState, 
     ctx.restore();
   }
 
-  if (!state.active) return;
+  if (!state.active && !state.reelingEmpty) return;
 
   const bobberY = state.bobberY + state.bobberDip;
 

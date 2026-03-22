@@ -3,6 +3,9 @@
 import type { PondBounds } from './pond.ts';
 import { isInWater } from './pond.ts';
 import { spawnSplash } from './splash.ts';
+import { spawnRipple } from './ripples.ts';
+import { playSplash } from './sounds.ts';
+import { hasEffect } from './shop.ts';
 
 export interface Pellet {
   x: number;
@@ -10,6 +13,7 @@ export interface Pellet {
   vy: number;
   alive: boolean;
   inWater: boolean;
+  swayPhase: number;
 }
 
 const pellets: Pellet[] = [];
@@ -19,14 +23,18 @@ export function getPellets(): readonly Pellet[] {
 }
 
 export function dropPellet(x: number, _y: number, bounds: PondBounds) {
-  // Pellet always starts at the water surface and sinks down
-  pellets.push({
-    x,
-    y: bounds.waterTop - 2,
-    vy: 0,
-    alive: true,
-    inWater: false,
-  });
+  const count = hasEffect('extra_pellets') ? 3 : 1;
+  for (let i = 0; i < count; i++) {
+    // Pellet always starts at the water surface and sinks down
+    pellets.push({
+      x: x + (Math.random() - 0.5) * 90,
+      y: bounds.waterTop - 2 - Math.random() * 30,
+      vy: 0,
+      alive: true,
+      inWater: false,
+      swayPhase: Math.random() * Math.PI * 2,
+    });
+  }
 }
 
 export function updatePellets(dt: number, bounds: PondBounds) {
@@ -46,11 +54,16 @@ export function updatePellets(dt: number, bounds: PondBounds) {
       // Just entered water — splash!
       p.inWater = true;
       spawnSplash(p.x, p.y);
+      spawnRipple(p.x, p.y);
+      playSplash();
     }
 
     if (p.inWater) {
       p.vy += 0.006 * (dt / 16);  // gentle gravity
       p.vy *= 0.92;               // water drag
+      // Gentle sway left/right as it sinks
+      p.swayPhase += 0.002 * (dt / 16);
+      p.x += Math.sin(p.swayPhase) * 0.02 * (dt / 16);
     }
 
     p.y += p.vy * (dt / 16);

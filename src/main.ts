@@ -3,9 +3,22 @@ import { createKoi, updateKoi, drawKoi, tryBreed, spawnHearts, updateHearts, dra
 import { spawnBubblesRandomly, updateBubbles, drawBubbles } from './bubbles.ts';
 import { dropPellet, updatePellets, drawPellets, getPellets } from './food.ts';
 import { updateSplashes, drawSplashes } from './splash.ts';
+import { updateRipples, drawRipples } from './ripples.ts';
+import { updateDragonflies, drawDragonflies } from './dragonflies.ts';
+import { updateFireflies, drawFireflies } from './daycycle.ts';
+import { updateFrogs, drawFrogsSitting, drawFrogsSwimming, clickFrog } from './frogs.ts';
 import { createTurtle, updateTurtle, drawTurtle, updateBoneParticles, drawBoneParticles } from './turtle.ts';
+import { createSnail, updateSnail, drawSnail } from './snail.ts';
+import { createCrayfish, updateCrayfish, drawCrayfish } from './crayfish.ts';
+import { createCatfish, updateCatfish, drawCatfish } from './catfish.ts';
+import { createHeron, updateHeron, drawHeron, scareHeron } from './heron.ts';
 import { createFishingState, startCharge, releaseCharge, reelIn, reelClick, updateFishing, drawDock, drawFisherman, drawFishing, drawScore } from './fishing.ts';
 import { createTreasureChest, respawnChest, drawTreasureChest } from './treasure.ts';
+import { createShop, isShopOpen, drawShopButton, drawShop, handleShopClick } from './shop.ts';
+import { updateAmbientSounds } from './sounds.ts';
+import { isNighttime, adjustDayCycle } from './daycycle.ts';
+import { createSettings, isSettingsOpen, drawSettingsButton, drawSettings, handleSettingsClick } from './settings.ts';
+import { initAudio, playAmbient } from './sounds.ts';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
@@ -29,6 +42,8 @@ window.addEventListener('resize', resize);
 
 let bounds = getPondBounds(W, H);
 const fishingState = createFishingState();
+const shop = createShop();
+const settings = createSettings();
 
 // Mouse down: start charging cast (above water) or prepare to drop food (in water)
 let mouseDownY = 0;
@@ -36,21 +51,35 @@ let mouseDownX = 0;
 let mouseIsDown = false;
 
 canvas.addEventListener('mousedown', (e) => {
+  initAudio();
+  playAmbient();
+
   const x = e.clientX / PIXEL_SCALE;
   const y = e.clientY / PIXEL_SCALE;
   mouseDownX = x;
   mouseDownY = y;
   mouseIsDown = true;
 
+  // Settings click takes priority
+  if (handleSettingsClick(settings, x, y, W, H)) return;
+
+  // Shop click takes priority
+  if (handleShopClick(shop, fishingState, x, y, W, H)) return;
+
+  // Click a sitting frog to make it jump
+  if (clickFrog(x, y, W, H, lastTime)) return;
+
+  // Scare heron if it's hovering or diving
+  if (heron.state === 'hovering' || heron.state === 'diving') {
+    scareHeron(heron, lastTime);
+  }
+
   if (fishingState.reeling) {
     // Tug-of-war — each click reels in
-    reelClick(fishingState, lastTime, chest);
+    reelClick(fishingState, lastTime, chest, catfish);
   } else if (fishingState.active || fishingState.catching) {
     // Line is out — reel in on click
     reelIn(fishingState, lastTime, chest);
-  } else if (y < bounds.waterTop + 5) {
-    // Above water — start charging a cast
-    startCharge(fishingState, lastTime);
   }
 });
 
@@ -60,10 +89,9 @@ canvas.addEventListener('mouseup', (e) => {
 
   const y = e.clientY / PIXEL_SCALE;
 
-  if (fishingState.charging) {
-    // Release the cast
-    releaseCharge(fishingState, bounds, lastTime, W, H);
-  } else if (y >= bounds.waterTop && !fishingState.active) {
+  if (isShopOpen(shop) || isSettingsOpen(settings)) return;
+
+  if (y >= bounds.waterTop && !fishingState.active && !fishingState.reeling) {
     // Clicked in the water — drop food
     dropPellet(mouseDownX, mouseDownY, bounds);
   }
@@ -74,6 +102,31 @@ canvas.addEventListener('mouseleave', () => {
     fishingState.charging = false;
   }
   mouseIsDown = false;
+});
+
+// Spacebar: hold to charge cast, release to cast, tap to reel in / click during tug-of-war
+window.addEventListener('keydown', (e) => {
+  if (e.code !== 'Space') return;
+  e.preventDefault();
+  initAudio();
+  playAmbient();
+
+  if (fishingState.reeling) {
+    reelClick(fishingState, lastTime, chest, catfish);
+  } else if (fishingState.active) {
+    reelIn(fishingState, lastTime, chest);
+  } else if (!fishingState.charging && !fishingState.casting) {
+    startCharge(fishingState, lastTime);
+  }
+});
+
+window.addEventListener('keyup', (e) => {
+  if (e.code !== 'Space') return;
+  e.preventDefault();
+
+  if (fishingState.charging) {
+    releaseCharge(fishingState, bounds, lastTime, W, H);
+  }
 });
 
 // Right click to spawn a fish — cycles through temperaments
@@ -94,12 +147,59 @@ const fish = Array.from({ length: fishCount }, () => createKoi(bounds));
 // One turtle
 const turtle = createTurtle(bounds);
 
+// One catfish
+const catfish = createCatfish(bounds);
+
+// One snail
+const snail = createSnail(bounds);
+
+// One crayfish
+const crayfish = createCrayfish(bounds);
+const crayfish2 = createCrayfish(bounds);
+
+// Heron predator
+const heron = createHeron();
+
+// Golden koi spawning tracker
+let lastGoldenSpawn = 0;
+
 // Treasure chest
 const chest = createTreasureChest(bounds);
 
 let lastTime = 0;
+let paused = false;
+let pauseTimeOffset = 0;
+let pauseStartedAt = 0;
 
-function loop(t: number) {
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Escape') {
+    e.preventDefault();
+    if (!paused) {
+      paused = true;
+      pauseStartedAt = performance.now();
+    } else {
+      paused = false;
+      pauseTimeOffset += performance.now() - pauseStartedAt;
+    }
+  }
+  // Arrow keys: advance/rewind day cycle (1 hour = 1/24 of cycle)
+  if (e.code === 'ArrowRight') {
+    e.preventDefault();
+    adjustDayCycle(180_000 / 24); // advance 1 hour
+  }
+  if (e.code === 'ArrowLeft') {
+    e.preventDefault();
+    adjustDayCycle(-180_000 / 24); // rewind 1 hour
+  }
+});
+
+function loop(rawT: number) {
+  if (paused) {
+    requestAnimationFrame(loop);
+    return;
+  }
+
+  const t = rawT - pauseTimeOffset;
   const dt = lastTime ? Math.min(t - lastTime, 50) : 16;
   lastTime = t;
 
@@ -118,14 +218,29 @@ function loop(t: number) {
   drawDecorations(ctx, W, H, t);
   drawTreasureChest(ctx, chest, t);
 
+  drawFrogsSitting(ctx, t);        // frogs on rocks, behind water
+
   spawnBubblesRandomly(bounds, t);
   updateBubbles(dt, bounds);
   updatePellets(dt, bounds);
   updateSplashes(dt);
+  updateRipples(dt);
+  updateDragonflies(dt, t, W, H);
+  updateFireflies(dt, t, W, H);
+  updateFrogs(dt, t, W, H);
 
   // Remove fully dead fish
   for (let i = fish.length - 1; i >= 0; i--) {
     if (!fish[i].alive) fish.splice(i, 1);
+  }
+
+  // Golden koi spawning: one every 60s, max 2 alive
+  if (t - lastGoldenSpawn > 60000) {
+    const goldenCount = fish.filter(f => f.alive && !f.dead && f.temperament === 'golden').length;
+    if (goldenCount < 2) {
+      fish.push(createKoi(bounds, 'golden'));
+      lastGoldenSpawn = t;
+    }
   }
 
   // Breeding
@@ -142,22 +257,44 @@ function loop(t: number) {
   }
 
   updateTurtle(turtle, bounds, t, dt, fish);
+  updateSnail(snail, bounds, dt, t);
+  updateCrayfish(crayfish, bounds, dt, t, fish, turtle);
+  updateCrayfish(crayfish2, bounds, dt, t, fish, turtle);
+  updateCatfish(catfish, bounds, t, dt, pellets,
+    fishingState.hookX, fishingState.hookY, fishingState.active);
+  updateHeron(heron, bounds, t, dt, fish);
   updateBoneParticles(dt);
-  updateFishing(fishingState, bounds, t, dt, fish, turtle, W, H, chest);
+  updateFishing(fishingState, bounds, t, dt, fish, turtle, W, H, chest, catfish);
 
+  drawSnail(ctx, snail, t);
+  drawCrayfish(ctx, crayfish, t);
+  drawCrayfish(ctx, crayfish2, t);
   for (const koi of fish) {
     drawKoi(ctx, koi, t);
   }
   drawTurtle(ctx, turtle, t);
+  drawCatfish(ctx, catfish, t);
   drawBoneParticles(ctx);
 
   drawPellets(ctx);
   drawBubbles(ctx);
   drawSplashes(ctx);
+  drawRipples(ctx);
+  drawFrogsSwimming(ctx, t);       // frogs in water, after fish
+  drawDragonflies(ctx, t);         // dragonflies above water
+  drawFireflies(ctx, t);           // fireflies at night
   drawHearts(ctx);
   drawFishing(ctx, fishingState, t);
   drawFisherman(ctx, fishingState, W, H, t);  // fisherman on top of everything
+  drawHeron(ctx, heron, t);                   // heron on top of everything
   drawScore(ctx, fishingState);
+  drawShopButton(ctx, W, H);
+  drawShop(ctx, shop, fishingState, W, H);
+  drawSettingsButton(ctx, W, H);
+  drawSettings(ctx, settings, W, H);
+
+  // Ambient nature sounds
+  updateAmbientSounds(t, isNighttime(t));
 
   requestAnimationFrame(loop);
 }

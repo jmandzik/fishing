@@ -1,5 +1,8 @@
 // Side cross-section view of a koi pond: organic bowl shape, flat water surface
 
+import { getSkyColors, getSunPosition, getMoonPosition, drawStars, getCloudTint, getDarkness, isNighttime } from './daycycle.ts';
+import { hasEffect } from './shop.ts';
+
 export interface PondBounds {
   left: number;
   right: number;
@@ -164,7 +167,7 @@ export function isInWater(x: number, y: number, bounds: PondBounds): boolean {
   return ix > row.left + 2 && ix < row.right - 2;
 }
 
-function drawCloud(ctx: CanvasRenderingContext2D, x: number, y: number) {
+function drawCloud(ctx: CanvasRenderingContext2D, x: number, y: number, tint?: string) {
   ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
   ctx.beginPath();
   ctx.arc(x, y, 8, 0, Math.PI * 2);
@@ -172,6 +175,11 @@ function drawCloud(ctx: CanvasRenderingContext2D, x: number, y: number) {
   ctx.arc(x + 22, y - 1, 8, 0, Math.PI * 2);
   ctx.arc(x + 14, y + 2, 7, 0, Math.PI * 2);
   ctx.fill();
+  // Night tint overlay
+  if (tint) {
+    ctx.fillStyle = tint;
+    ctx.fill();
+  }
 }
 
 function drawTree(ctx: CanvasRenderingContext2D, x: number, groundY: number, size: number, sway: number) {
@@ -589,7 +597,8 @@ function drawBird(ctx: CanvasRenderingContext2D, x: number, y: number, size: num
   ctx.lineCap = 'butt';
 }
 
-function drawBirds(ctx: CanvasRenderingContext2D, w: number, h: number, t: number) {
+function drawBirds(ctx: CanvasRenderingContext2D, w: number, h: number, t: number, night: boolean) {
+  if (night) return;
   const b = getPondBounds(w, h);
   const skyH = b.waterTop;
 
@@ -617,40 +626,72 @@ function drawBirds(ctx: CanvasRenderingContext2D, w: number, h: number, t: numbe
 
 export function drawPond(ctx: CanvasRenderingContext2D, w: number, h: number, t: number) {
   const b = getPondBounds(w, h);
+  const night = isNighttime(t);
+  const darkness = getDarkness(t);
+  const skyColors = getSkyColors(t);
+  const cloudTint = getCloudTint(t);
 
-  // Sky
+  // Sky gradient from day/night cycle
   const skyGrd = ctx.createLinearGradient(0, 0, 0, b.waterTop);
-  skyGrd.addColorStop(0, '#5BA8E0');
-  skyGrd.addColorStop(1, '#A0D4F0');
+  skyGrd.addColorStop(0, skyColors.top);
+  skyGrd.addColorStop(1, skyColors.bottom);
   ctx.fillStyle = skyGrd;
   ctx.fillRect(0, 0, w, b.waterTop);
 
-  // Sun (smaller, upper-left so it doesn't overlap fisherman)
-  const sunX = w * 0.15;
-  const sunY = b.waterTop * 0.3;
-  ctx.fillStyle = 'rgba(255, 241, 118, 0.2)';
-  ctx.beginPath();
-  ctx.arc(sunX, sunY, 12, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#FFF176';
-  ctx.beginPath();
-  ctx.arc(sunX, sunY, 7, 0, Math.PI * 2);
-  ctx.fill();
+  // Stars at night
+  drawStars(ctx, w, b.waterTop, t);
 
-  // Clouds — scroll slowly
-  drawCloud(ctx, ((t * 0.008 + 30) % (w + 60)) - 30, b.waterTop * 0.3);
-  drawCloud(ctx, ((t * 0.005 + 120) % (w + 60)) - 30, b.waterTop * 0.55);
-  drawCloud(ctx, ((t * 0.006 + 200) % (w + 60)) - 30, b.waterTop * 0.2);
+  // Sun — arcs across sky during dawn/day/dusk
+  const sun = getSunPosition(t, w, b.waterTop);
+  if (sun.visible) {
+    ctx.fillStyle = 'rgba(255, 241, 118, 0.2)';
+    ctx.beginPath();
+    ctx.arc(sun.x, sun.y, 12, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#FFF176';
+    ctx.beginPath();
+    ctx.arc(sun.x, sun.y, 7, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
-  // Birds drifting across the sky
-  drawBirds(ctx, w, h, t);
+  // Moon at night
+  const moon = getMoonPosition(t, w, b.waterTop);
+  if (moon.visible) {
+    // Soft glow
+    ctx.fillStyle = 'rgba(200, 210, 230, 0.15)';
+    ctx.beginPath();
+    ctx.arc(moon.x, moon.y, 12, 0, Math.PI * 2);
+    ctx.fill();
+    // Moon body
+    ctx.fillStyle = '#D8D8E8';
+    ctx.beginPath();
+    ctx.arc(moon.x, moon.y, 6, 0, Math.PI * 2);
+    ctx.fill();
+    // Darker crescent shadow
+    ctx.fillStyle = '#A0A0B8';
+    ctx.beginPath();
+    ctx.arc(moon.x + 2, moon.y - 1, 5, 0, Math.PI * 2);
+    ctx.fill();
+    // Bright face
+    ctx.fillStyle = '#E8E8F4';
+    ctx.beginPath();
+    ctx.arc(moon.x - 1, moon.y, 5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Clouds — scroll slowly, tinted at night
+  drawCloud(ctx, ((t * 0.008 + 30) % (w + 60)) - 30, b.waterTop * 0.3, cloudTint);
+  drawCloud(ctx, ((t * 0.005 + 120) % (w + 60)) - 30, b.waterTop * 0.55, cloudTint);
+  drawCloud(ctx, ((t * 0.006 + 200) % (w + 60)) - 30, b.waterTop * 0.2, cloudTint);
+
+  // Birds drifting across the sky — not at night
+  drawBirds(ctx, w, h, t, night);
 
   // Earthy ground below sky — fills the full area, water bowl draws over it
   const groundGrd = ctx.createLinearGradient(0, b.waterTop - 5, 0, h);
   groundGrd.addColorStop(0, '#7A6A4E');
   groundGrd.addColorStop(0.3, '#6B5B3E');
   groundGrd.addColorStop(1, '#5A4A30');
-  // Ground fills everywhere below waterTop — the water bowl will draw over the interior
   ctx.fillStyle = groundGrd;
   ctx.fillRect(0, b.waterTop, w, h - b.waterTop);
 
@@ -663,6 +704,12 @@ export function drawPond(ctx: CanvasRenderingContext2D, w: number, h: number, t:
     ctx.beginPath();
     ctx.ellipse(dx, dy, 3 + (i % 4) * 2, 1.5 + (i % 3), (i * 0.5) % Math.PI, 0, Math.PI * 2);
     ctx.fill();
+  }
+
+  // Darkness overlay on ground
+  if (darkness > 0) {
+    ctx.fillStyle = `rgba(0, 0, 15, ${darkness})`;
+    ctx.fillRect(0, b.waterTop, w, h - b.waterTop);
   }
 
   // Ground decorations
@@ -681,8 +728,6 @@ export function drawPond(ctx: CanvasRenderingContext2D, w: number, h: number, t:
 
   // Rocks along the rim
   drawRocks(ctx, b);
-
-  // No outline stroke — the sand rim and ground provide the edge
 
   // Sand rim — only at the very bottom of the bowl
   ctx.save();
@@ -709,6 +754,13 @@ export function drawPond(ctx: CanvasRenderingContext2D, w: number, h: number, t:
   drawBowlPath(ctx, b, 0);
   ctx.fill();
 
+  // Darkness overlay on water at night
+  if (darkness > 0) {
+    ctx.fillStyle = `rgba(0, 0, 20, ${darkness})`;
+    drawBowlPath(ctx, b, 0);
+    ctx.fill();
+  }
+
   // Water surface — gentle animated ripples
   const surfaceY = b.waterTop;
   ctx.strokeStyle = 'rgba(150, 220, 255, 0.5)';
@@ -723,26 +775,19 @@ export function drawPond(ctx: CanvasRenderingContext2D, w: number, h: number, t:
     ctx.stroke();
   }
 
-  // Subtle light caustic patterns moving across the water surface
-  ctx.fillStyle = 'rgba(180, 230, 255, 0.08)';
-  for (let i = 0; i < 6; i++) {
-    const cx = b.left + ((t * 0.01 * (i + 1) + i * 50) % (b.right - b.left));
-    const cy = surfaceY + 8 + Math.sin(t * 0.002 + i) * 5;
-    const rx = 8 + Math.sin(t * 0.001 + i * 2) * 3;
-    ctx.beginPath();
-    ctx.ellipse(cx, cy, rx, rx * 0.4, t * 0.0005 + i, 0, Math.PI * 2);
-    ctx.fill();
-  }
+  // Removed caustic ovals — too distracting
 }
 
 function drawRocks(ctx: CanvasRenderingContext2D, b: PondBounds) {
   const rocks = [
-    { x: b.left - 8, y: b.waterTop - 8, w: 28, h: 20 },
-    { x: b.left + 5, y: b.waterTop - 15, w: 22, h: 18 },
-    { x: b.left - 12, y: b.waterTop + 5, w: 24, h: 16 },
-    { x: b.right - 18, y: b.waterTop - 10, w: 26, h: 18 },
-    { x: b.right - 5, y: b.waterTop - 5, w: 20, h: 16 },
-    { x: b.right + 2, y: b.waterTop + 8, w: 22, h: 14 },
+    // Left side — small, sitting on the ground beside the pond
+    { x: b.left - 6, y: b.waterTop - 2, w: 12, h: 8 },
+    { x: b.left + 2, y: b.waterTop - 6, w: 10, h: 7 },
+    { x: b.left - 10, y: b.waterTop - 1, w: 9, h: 6 },
+    // Right side
+    { x: b.right + 2, y: b.waterTop - 2, w: 12, h: 8 },
+    { x: b.right - 4, y: b.waterTop - 5, w: 10, h: 7 },
+    { x: b.right + 8, y: b.waterTop - 1, w: 9, h: 6 },
   ];
 
   for (const rock of rocks) {
@@ -988,6 +1033,66 @@ export function drawDecorations(ctx: CanvasRenderingContext2D, w: number, h: num
           sx + offset + strandSway * 0.6, floorY - h * 0.5,
           2, 1.2, strandSway * 0.1, 0, Math.PI * 2,
         );
+        ctx.fill();
+      }
+    }
+  }
+
+  // --- Lily pads (if upgrade purchased) ---
+  if (hasEffect('lily_pads')) {
+    const lilyPads = [
+      { xOff: -0.18, size: 7 },
+      { xOff: 0.05, size: 6 },
+      { xOff: 0.22, size: 8 },
+      { xOff: -0.08, size: 5 },
+    ];
+
+    for (let i = 0; i < lilyPads.length; i++) {
+      const lp = lilyPads[i];
+      const lx = b.centerX + pondW * lp.xOff;
+      const ly = b.waterTop + Math.sin(t * 0.0015 + i * 2.1) * 1;
+
+      // Shadow
+      ctx.fillStyle = 'rgba(0,0,0,0.1)';
+      ctx.beginPath();
+      ctx.ellipse(lx + 0.5, ly + 1, lp.size, lp.size * 0.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Pad body
+      ctx.fillStyle = '#2D7A2D';
+      ctx.beginPath();
+      ctx.ellipse(lx, ly, lp.size, lp.size * 0.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Notch (pie slice cut)
+      ctx.fillStyle = '#3A8A4A';
+      ctx.beginPath();
+      ctx.moveTo(lx, ly);
+      ctx.lineTo(lx + lp.size * 0.8, ly - lp.size * 0.15);
+      ctx.lineTo(lx + lp.size * 0.8, ly + lp.size * 0.15);
+      ctx.closePath();
+      ctx.fill();
+
+      // Vein lines
+      ctx.strokeStyle = '#1E6B1E';
+      ctx.lineWidth = 0.4;
+      for (let v = 0; v < 4; v++) {
+        const angle = (v / 4) * Math.PI * 2 + 0.3;
+        ctx.beginPath();
+        ctx.moveTo(lx, ly);
+        ctx.lineTo(lx + Math.cos(angle) * lp.size * 0.7, ly + Math.sin(angle) * lp.size * 0.3);
+        ctx.stroke();
+      }
+
+      // Small flower on one pad
+      if (i === 2) {
+        ctx.fillStyle = '#FF88AA';
+        ctx.beginPath();
+        ctx.arc(lx - 2, ly - 2, 2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#FFDD66';
+        ctx.beginPath();
+        ctx.arc(lx - 2, ly - 2, 0.8, 0, Math.PI * 2);
         ctx.fill();
       }
     }

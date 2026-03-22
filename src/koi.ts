@@ -3,8 +3,10 @@
 import type { PondBounds } from './pond.ts';
 import { isInWater } from './pond.ts';
 import type { Pellet } from './food.ts';
+import { isNighttime } from './daycycle.ts';
+import { playChomp, playHeartbeat } from './sounds.ts';
 
-export type Temperament = 'aggressive' | 'neutral' | 'shy';
+export type Temperament = 'aggressive' | 'neutral' | 'shy' | 'golden';
 
 export interface Koi {
   x: number;
@@ -50,6 +52,9 @@ const PALETTES: Record<Temperament, { color: string; accent: string }[]> = {
     { color: '#B088C0', accent: '#D4B0E0' },
     { color: '#7DB87D', accent: '#A8D8A8' },
   ],
+  golden: [
+    { color: '#FFD700', accent: '#FFF8A0' },
+  ],
 };
 
 const BEHAVIOR: Record<Temperament, {
@@ -72,15 +77,19 @@ const BEHAVIOR: Record<Temperament, {
     huntRange: 40, fleeRange: 90, huntSizeRatio: 2.5,
     fleeSizeRatio: 1.5, foodRange: 60, speed: 1.3,
   },
+  golden: {
+    huntRange: 40, fleeRange: 100, huntSizeRatio: 2.5,
+    fleeSizeRatio: 1.3, foodRange: 120, speed: 1.6,
+  },
 };
 
 let nextId = 1;
 
 export function createKoi(bounds: PondBounds, temperament?: Temperament, parentPos?: { x: number; y: number }): Koi {
-  const temp = temperament ?? (['aggressive', 'neutral', 'shy'] as const)[Math.floor(Math.random() * 3)];
+  const temp: Temperament = temperament ?? (['aggressive', 'neutral', 'shy'] as const)[Math.floor(Math.random() * 3)];
   const palette = PALETTES[temp];
   const chosen = palette[Math.floor(Math.random() * palette.length)];
-  const size = parentPos ? 5 : 8 + Math.random() * 5;
+  const size = parentPos ? 3.3 : 5.3 + Math.random() * 3.3;
   const midY = (bounds.waterTop + bounds.bowlBottom) / 2;
 
   return {
@@ -183,7 +192,7 @@ export function updateKoi(
     koi.vy *= 0.9;
     koi.x += koi.vx * (dt / 16);
     koi.y += koi.vy * (dt / 16);
-    koi.tailPhase = t * 0.003; // slow tail while hiding
+    koi.tailPhase += 0.002 * (dt / 16); // slow idle wag while hiding
     return;
   }
 
@@ -228,14 +237,24 @@ export function updateKoi(
     } else {
       const fleeD = Math.sqrt(threatX * threatX + threatY * threatY);
       if (fleeD > 0) {
-        koi.targetX = koi.x - (threatX / fleeD) * 50;
-        koi.targetY = koi.y - (threatY / fleeD) * 50;
+        let fleeX = koi.x - (threatX / fleeD) * 50;
+        let fleeY = koi.y - (threatY / fleeD) * 50;
+        // Clamp flee target inside the pond so fish don't oscillate against walls
+        fleeX = Math.max(bounds.left + 15, Math.min(bounds.right - 15, fleeX));
+        fleeY = Math.max(bounds.waterTop + 10, Math.min(bounds.bowlBottom - 10, fleeY));
+        // If target is still outside water, flee toward center instead
+        if (!isInWater(fleeX, fleeY, bounds)) {
+          fleeX = bounds.centerX + (Math.random() - 0.5) * (bounds.right - bounds.left) * 0.3;
+          fleeY = (bounds.waterTop + bounds.bowlBottom) / 2;
+        }
+        koi.targetX = fleeX;
+        koi.targetY = fleeY;
       }
     }
   }
 
   // --- Hunt prey ---
-  if (!fleeing) {
+  if (!fleeing && t - koi.lastAteAt > 24000) {
     const effectiveHuntRange = beh.huntRange * hungerFactor;
     const effectiveHuntRatio = Math.max(beh.huntSizeRatio - koi.hunger * 0.5, 1.3);
     let nearestPreyDist = Infinity;
@@ -260,20 +279,23 @@ export function updateKoi(
       koi.targetY = nearestPrey.y;
       chasing = true;
 
-      if (nearestPreyDist < koi.size * 0.6 && t - koi.lastAteAt > 2000) {
+      if (nearestPreyDist < koi.size * 0.6 && t - koi.lastAteAt > 24000) {
         nearestPrey.alive = false;
-        const preyGrow = koi.size < 8 ? nearestPrey.size * 0.8 : nearestPrey.size * 0.5;
-        koi.size = Math.min(koi.size + preyGrow, 25);
+        const preyGrow = koi.size < 5.3 ? nearestPrey.size * 0.8 : nearestPrey.size * 0.5;
+        koi.size = Math.min(koi.size + preyGrow, 17);
         koi.hunger = Math.max(koi.hunger - 0.6, 0);
         koi.lastAteAt = t;
         koi.chompUntil = t + 400;
         koi.starvingSince = 0;
+        playChomp();
       }
     }
   }
 
   // --- Chase food pellets ---
-  if (!fleeing && !chasing) {
+  const canEat = t - koi.lastAteAt > 15000;
+
+  if (!fleeing && !chasing && canEat) {
     const effectiveFoodRange = beh.foodRange * hungerFactor;
     let closestDist = Infinity;
     let closestPellet: Pellet | null = null;
@@ -293,20 +315,25 @@ export function updateKoi(
       koi.targetY = closestPellet.y;
       chasing = true;
 
-      if (closestDist < 5 && t - koi.lastAteAt > 1000) {
+      if (closestDist < 5) {
         closestPellet.alive = false;
-        const growAmount = koi.size < 8 ? 0.8 : 0.3; // babies grow faster
-        koi.size = Math.min(koi.size + growAmount, 25);
+        const growAmount = koi.size < 5.3 ? 0.8 : 0.3; // babies grow faster
+        koi.size = Math.min(koi.size + growAmount, 17);
         koi.hunger = Math.max(koi.hunger - 0.3, 0);
         koi.lastAteAt = t;
         koi.chompUntil = t + 300;
         koi.starvingSince = 0;
+        playChomp();
       }
     }
   }
 
   // --- Idle behavior ---
-  if (!chasing && !fleeing && koi.hunger > 0.5 && t > koi.nextTargetTime) {
+  const night = isNighttime(t);
+  const idleMultiplier = night ? 2.5 : 1; // longer idle times at night
+
+  if (!chasing && !fleeing && koi.hunger > 0.5 && t > koi.nextTargetTime && !night) {
+    // Hungry surface seeking — disabled at night
     const surfaceY = bounds.waterTop + 10 + Math.random() * 15;
     const tx = bounds.centerX + (Math.random() - 0.5) * (bounds.right - bounds.left) * 0.6;
     if (isInWater(tx, surfaceY, bounds)) {
@@ -317,19 +344,33 @@ export function updateKoi(
     }
     koi.nextTargetTime = t + 1000 + Math.random() * 2000;
   } else if (!chasing && !fleeing && t > koi.nextTargetTime) {
-    pickTarget(koi, bounds);
-    koi.nextTargetTime = t + 2000 + Math.random() * 4000;
+    if (night) {
+      // At night, drift toward the bottom of the pond
+      const bottomY = bounds.bowlBottom - (bounds.bowlBottom - bounds.waterTop) * 0.2;
+      const tx = bounds.centerX + (Math.random() - 0.5) * (bounds.right - bounds.left) * 0.4;
+      const ty = bottomY - Math.random() * (bounds.bowlBottom - bounds.waterTop) * 0.2;
+      if (isInWater(tx, ty, bounds)) {
+        koi.targetX = tx;
+        koi.targetY = ty;
+      } else {
+        pickTarget(koi, bounds);
+      }
+    } else {
+      pickTarget(koi, bounds);
+    }
+    koi.nextTargetTime = t + (2000 + Math.random() * 4000) * idleMultiplier;
   }
 
   // --- Movement ---
   const dx = koi.targetX - koi.x;
   const dy = koi.targetY - koi.y;
   const dist = Math.sqrt(dx * dx + dy * dy);
+  const nightSpeedFactor = night ? 0.5 : 1;
 
   if (dist > 2) {
-    const speed = (chasing || fleeing)
+    const speed = ((chasing || fleeing)
       ? Math.min(dist * 0.03, 2.5) * beh.speed
-      : Math.min(dist * 0.008, 0.8);
+      : Math.min(dist * 0.008, 0.8)) * nightSpeedFactor;
     const accel = (chasing || fleeing) ? 0.15 : 0.05;
     koi.vx += (dx / dist) * speed * accel * (dt / 16);
     koi.vy += (dy / dist) * speed * accel * (dt / 16);
@@ -345,19 +386,35 @@ export function updateKoi(
   koi.y += koi.vy * (dt / 16);
 
   if (!isInWater(koi.x, koi.y, bounds)) {
-    const midY = (bounds.waterTop + bounds.bowlBottom) / 2;
-    const toCenterX = bounds.centerX - koi.x;
-    const toCenterY = midY - koi.y;
-    const toCenterDist = Math.sqrt(toCenterX * toCenterX + toCenterY * toCenterY);
-    if (toCenterDist > 0) {
-      koi.vx += (toCenterX / toCenterDist) * 0.4;
-      koi.vy += (toCenterY / toCenterDist) * 0.4;
+    // Allow jumping above the surface (looks cool) but not into dirt/walls
+    const aboveSurface = koi.y < bounds.waterTop && koi.x > bounds.left + 5 && koi.x < bounds.right - 5;
+
+    if (aboveSurface) {
+      // Gravity pulls them back into the water
+      koi.vy += 0.08 * (dt / 16);
+      // Hard cap: don't fly too high above surface
+      if (koi.y < bounds.waterTop - 20) {
+        koi.y = bounds.waterTop - 20;
+        koi.vy = Math.abs(koi.vy) * 0.5;
+      }
+    } else {
+      // In the dirt/walls — push back hard toward center
+      const midY = (bounds.waterTop + bounds.bowlBottom) / 2;
+      const toCenterX = bounds.centerX - koi.x;
+      const toCenterY = midY - koi.y;
+      const toCenterDist = Math.sqrt(toCenterX * toCenterX + toCenterY * toCenterY);
+      if (toCenterDist > 0) {
+        koi.vx = (toCenterX / toCenterDist) * 1.5;
+        koi.vy = (toCenterY / toCenterDist) * 1.5;
+      }
+      koi.x += koi.vx * 2;
+      koi.y += koi.vy * 2;
     }
-    koi.x += koi.vx;
-    koi.y += koi.vy;
   }
 
-  koi.tailPhase = t * 0.006;
+  // Tail wag driven by speed — slow idle wag + faster when moving
+  const fishSpeed = Math.sqrt(koi.vx * koi.vx + koi.vy * koi.vy);
+  koi.tailPhase += (0.003 + fishSpeed * 0.08) * (dt / 16);
 }
 
 // --- Breeding ---
@@ -372,12 +429,12 @@ export function tryBreed(allFish: Koi[], bounds: PondBounds, t: number): BreedRe
 
   for (let i = 0; i < allFish.length; i++) {
     const a = allFish[i];
-    if (!a.alive || a.dead || a.hunger > 0.5 || a.size < 8) continue;
+    if (!a.alive || a.dead || a.hunger > 0.5 || a.size < 5.3) continue;
     if (t - a.lastBredAt < 20000) continue;
 
     for (let j = i + 1; j < allFish.length; j++) {
       const b = allFish[j];
-      if (!b.alive || b.dead || b.hunger > 0.5 || b.size < 8) continue;
+      if (!b.alive || b.dead || b.hunger > 0.5 || b.size < 5.3) continue;
       if (b.temperament !== a.temperament) continue;
       if (t - b.lastBredAt < 20000) continue;
 
@@ -401,6 +458,7 @@ export function tryBreed(allFish: Koi[], bounds: PondBounds, t: number): BreedRe
           baby.parentIds = [a.id, b.id];
           babies.push(baby);
         }
+        playHeartbeat();
         return { babies, x: midX, y: midY };
       }
     }
@@ -473,7 +531,7 @@ export function drawKoi(ctx: CanvasRenderingContext2D, koi: Koi, t: number) {
   }
 
   const s = koi.size;
-  const tailWag = Math.sin(koi.tailPhase + t * 0.008) * 0.35;
+  const tailWag = Math.sin(koi.tailPhase) * 0.35;
 
   // Shadow (skip for dead/floating fish)
   if (!koi.dead) {
@@ -573,6 +631,25 @@ export function drawKoi(ctx: CanvasRenderingContext2D, koi: Koi, t: number) {
   ctx.ellipse(s * 0.15, s * 0.3, s * 0.2, s * 0.08, 0.3 + finFlap, 0, Math.PI * 2);
   ctx.fill();
   ctx.globalAlpha = 1;
+
+  // Golden koi sparkle/shimmer effect
+  if (koi.temperament === 'golden' && !koi.dead) {
+    ctx.fillStyle = '#FFFFFF';
+    const sparkleCount = 4;
+    for (let i = 0; i < sparkleCount; i++) {
+      const phase = t * 0.005 + i * 1.7;
+      const alpha = Math.max(0, Math.sin(phase));
+      if (alpha > 0.3) {
+        ctx.globalAlpha = alpha * 0.8;
+        const sx = (Math.sin(i * 2.3) * s * 0.7);
+        const sy = (Math.cos(i * 3.1) * s * 0.25);
+        ctx.beginPath();
+        ctx.arc(sx, sy, 0.8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
 
   ctx.restore();
 }
