@@ -13,7 +13,7 @@ import { createCrayfish, updateCrayfish, drawCrayfish } from './crayfish.ts';
 import { createCatfish, updateCatfish, drawCatfish } from './catfish.ts';
 import { createHeron, updateHeron, drawHeron, scareHeron } from './heron.ts';
 import { createFishingState, startCharge, releaseCharge, reelIn, reelClick, updateFishing, updateFishermanEasterEggs, drawDock, drawFisherman, drawFishing, drawScore } from './fishing.ts';
-import { createTreasureChest, respawnChest, drawTreasureChest } from './treasure.ts';
+import { createTreasureChest, respawnChest, updateTreasureChest, drawTreasureChest } from './treasure.ts';
 import { createShop, isShopOpen, drawShopButton, drawShop, handleShopClick } from './shop.ts';
 import { updateAmbientSounds } from './sounds.ts';
 import { isNighttime, adjustDayCycle } from './daycycle.ts';
@@ -23,6 +23,7 @@ import { initAudio, playAmbient } from './sounds.ts';
 import { updateButterflies, drawFlowers, drawButterflies } from './butterflies.ts';
 import { updateDucks, drawDucks } from './ducks.ts';
 import { updateTadpoles, drawTadpoles } from './tadpoles.ts';
+import { createBaitState, handleBaitClick, drawBaitToggle } from './bait.ts';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
@@ -48,6 +49,7 @@ let bounds = getPondBounds(W, H);
 const fishingState = createFishingState();
 const shop = createShop();
 const settings = createSettings();
+const baitState = createBaitState();
 
 // Mouse down: start charging cast (above water) or prepare to drop food (in water)
 let mouseDownY = 0;
@@ -69,6 +71,9 @@ canvas.addEventListener('mousedown', (e) => {
 
   // Shop click takes priority
   if (handleShopClick(shop, fishingState, x, y, W, H)) return;
+
+  // Bait toggle
+  if (handleBaitClick(baitState, x, y, W, H)) return;
 
   // Click a sitting frog to make it jump
   if (clickFrog(x, y, W, H, lastTime)) return;
@@ -224,6 +229,7 @@ function loop(rawT: number) {
   drawWeatherSky(ctx, W, H, t);
   drawDock(ctx, W, H);         // dock behind decorations/fish
   drawDecorations(ctx, W, H, t);
+  updateTreasureChest(chest, dt);
   drawTreasureChest(ctx, chest, t);
 
   drawFrogsSitting(ctx, t);        // frogs on rocks, behind water
@@ -313,7 +319,7 @@ function loop(rawT: number) {
     fishingState.hookX, fishingState.hookY, fishingState.active);
   updateHeron(heron, bounds, t, dt, fish);
   updateBoneParticles(dt);
-  updateFishing(fishingState, bounds, t, dt, fish, turtle, W, H, chest, catfish);
+  updateFishing(fishingState, bounds, t, dt, fish, turtle, W, H, chest, catfish, baitState.enabled);
   updateFishermanEasterEggs(fishingState, bounds, t, dt, W, H);
   updateWeather(dt, t, W, H);
 
@@ -338,12 +344,13 @@ function loop(rawT: number) {
   drawButterflies(ctx, t);         // butterflies near trees
   drawFireflies(ctx, t);           // fireflies at night
   drawHearts(ctx);
-  drawFishing(ctx, fishingState, t);
+  drawFishing(ctx, fishingState, t, baitState.enabled);
   drawFisherman(ctx, fishingState, W, H, t);  // fisherman on top of everything
   drawHeron(ctx, heron, t);                   // heron on top of everything
   drawScore(ctx, fishingState, W, H);
   drawShopButton(ctx, W, H);
   drawShop(ctx, shop, fishingState, W, H);
+  drawBaitToggle(ctx, baitState, W, H, t);
   drawSettingsButton(ctx, W, H);
   drawSettings(ctx, settings, W, H);
   drawWeatherEffects(ctx, W, H, t);

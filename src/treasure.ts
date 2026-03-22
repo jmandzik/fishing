@@ -6,8 +6,10 @@ import { getBowlFloorY } from './pond.ts';
 export interface TreasureChest {
   x: number;
   y: number;
+  baseY: number;         // resting position on the floor
   visible: boolean;
   hooked: boolean;
+  sinking: boolean;      // true when floating back down after line break
   respawnAfter: number;
   coins: number;         // reward when caught (1-3)
 }
@@ -17,8 +19,10 @@ export function createTreasureChest(bounds: PondBounds): TreasureChest {
   const y = getBowlFloorY(x, bounds) - 4;
   return {
     x, y,
+    baseY: y,
     visible: true,
     hooked: false,
+    sinking: false,
     respawnAfter: 0,
     coins: 1 + Math.floor(Math.random() * 3),
   };
@@ -27,9 +31,22 @@ export function createTreasureChest(bounds: PondBounds): TreasureChest {
 export function respawnChest(chest: TreasureChest, bounds: PondBounds) {
   chest.x = bounds.centerX + (Math.random() - 0.5) * (bounds.right - bounds.left) * 0.5;
   chest.y = getBowlFloorY(chest.x, bounds) - 4;
+  chest.baseY = chest.y;
   chest.visible = true;
   chest.hooked = false;
+  chest.sinking = false;
   chest.coins = 1 + Math.floor(Math.random() * 3);
+}
+
+export function updateTreasureChest(chest: TreasureChest, dt: number) {
+  if (chest.sinking) {
+    // Float back down to the floor after line break
+    chest.y += 0.3 * (dt / 16);
+    if (chest.y >= chest.baseY) {
+      chest.y = chest.baseY;
+      chest.sinking = false;
+    }
+  }
 }
 
 export function drawTreasureChest(ctx: CanvasRenderingContext2D, chest: TreasureChest, t: number) {

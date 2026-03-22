@@ -345,7 +345,7 @@ const ROD_SWING_MS = 350;   // rod swings back then forward
 const BOBBER_FLY_MS = 400;  // bobber arcs through the air
 const CAST_TOTAL_MS = ROD_SWING_MS + BOBBER_FLY_MS;
 
-export function updateFishing(state: FishingState, bounds: PondBounds, t: number, dt: number, fish: Koi[], turtle: Turtle, w: number, h: number, chest: TreasureChest, catfish?: Catfish) {
+export function updateFishing(state: FishingState, bounds: PondBounds, t: number, dt: number, fish: Koi[], turtle: Turtle, w: number, h: number, chest: TreasureChest, catfish?: Catfish, hasBait: boolean = true) {
   // --- Line broke message ---
   if (state.lineBroke) {
     if (t - state.brokeTime > 1500) {
@@ -384,6 +384,11 @@ export function updateFishing(state: FishingState, bounds: PondBounds, t: number
     const surfaceY = bounds.waterTop + 5;
     state.hookY = state.hookY + (surfaceY - state.hookY) * state.reelProgress * 0.02 * (dt / 16);
 
+    // Chest tracks the hook position
+    if (chest && chest.hooked) {
+      chest.y = state.hookY;
+    }
+
     state.bobberDip = Math.sin(t * 0.02) * 1.5;
 
     // Line snaps (clicked too fast)
@@ -391,7 +396,10 @@ export function updateFishing(state: FishingState, bounds: PondBounds, t: number
     if (state.tension >= chestSnapThreshold) {
       state.reeling = false;
       state.reelingChest = false;
-      if (chest) chest.hooked = false;
+      if (chest) {
+        chest.hooked = false;
+        chest.sinking = true; // float back down to the floor
+      }
       state.lineBroke = true;
       state.brokeTime = t;
       playSnap();
@@ -576,7 +584,7 @@ export function updateFishing(state: FishingState, bounds: PondBounds, t: number
   }
 
   // Catfish near hook — treat as a special bite (goes straight to biting)
-  if (!state.nibbling && !state.biting && catfish && catfish.alive) {
+  if (hasBait && !state.nibbling && !state.biting && catfish && catfish.alive) {
     const cd = Math.hypot(catfish.x - state.hookX, catfish.y - state.hookY);
     if (cd < 12) {
       // Catfish bites hard and immediately — create a proxy koi
@@ -600,7 +608,7 @@ export function updateFishing(state: FishingState, bounds: PondBounds, t: number
   }
 
   // Regular fish near hook
-  if (!state.nibbling && !state.biting) {
+  if (hasBait && !state.nibbling && !state.biting) {
     for (const f of fish) {
       if (!f.alive || f.dead) continue;
       const d = Math.hypot(f.x - state.hookX, f.y - state.hookY);
@@ -639,15 +647,17 @@ export function updateFishing(state: FishingState, bounds: PondBounds, t: number
     state.bobberDip = 0;
   }
 
-  // Attract nearby hungry fish (only if they can eat)
-  for (const f of fish) {
-    if (!f.alive || f.dead) continue;
-    if (t - f.lastAteAt < 15000) continue; // still digesting
-    const d = Math.hypot(f.x - state.hookX, f.y - state.hookY);
-    const attractRange = hasEffect('better_bait') ? 60 : 40;
-    if (d < attractRange && d > 5 && f.hunger > 0.3) {
-      f.targetX = state.hookX;
-      f.targetY = state.hookY;
+  // Attract nearby hungry fish (only if they can eat and there's bait)
+  if (hasBait) {
+    for (const f of fish) {
+      if (!f.alive || f.dead) continue;
+      if (t - f.lastAteAt < 15000) continue; // still digesting
+      const d = Math.hypot(f.x - state.hookX, f.y - state.hookY);
+      const attractRange = hasEffect('better_bait') ? 60 : 40;
+      if (d < attractRange && d > 5 && f.hunger > 0.3) {
+        f.targetX = state.hookX;
+        f.targetY = state.hookY;
+      }
     }
   }
 }
@@ -1050,7 +1060,7 @@ export function drawFisherman(ctx: CanvasRenderingContext2D, state: FishingState
   }
 }
 
-export function drawFishing(ctx: CanvasRenderingContext2D, state: FishingState, t: number) {
+export function drawFishing(ctx: CanvasRenderingContext2D, state: FishingState, t: number, hasBait: boolean = true) {
   // --- Tug-of-war UI ---
   if (state.reeling) {
     const bobberY = state.bobberY + state.bobberDip;
@@ -1233,7 +1243,7 @@ export function drawFishing(ctx: CanvasRenderingContext2D, state: FishingState, 
   ctx.fill();
 
   // Bait — wriggly worm on the hook
-  if (!state.turtleStealing) {
+  if (hasBait && !state.turtleStealing) {
     const wx = state.hookX;
     const wy = state.hookY + 2;
     const wg1 = Math.sin(t * 0.006) * 2;
