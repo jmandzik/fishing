@@ -158,7 +158,20 @@ window.addEventListener('keyup', (e) => {
 let longPressTimer: ReturnType<typeof setTimeout> | null = null;
 let touchStartedCharge = false;
 
+let fullscreenRequested = false;
+function requestFullscreen() {
+  if (fullscreenRequested) return;
+  fullscreenRequested = true;
+  const el = document.documentElement;
+  const rfs = el.requestFullscreen
+    || (el as unknown as Record<string, () => Promise<void>>).webkitRequestFullscreen;
+  if (rfs) {
+    rfs.call(el).catch(() => { /* ignore denial */ });
+  }
+}
+
 function handleTouchDown(x: number, y: number) {
+  requestFullscreen();
   flushHaptics();
   initAudio();
   playAmbient();

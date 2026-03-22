@@ -439,7 +439,8 @@ export function tryBreed(allFish: Koi[], bounds: PondBounds, t: number): BreedRe
     for (let j = i + 1; j < allFish.length; j++) {
       const b = allFish[j];
       if (!b.alive || b.dead || b.hunger > 0.5 || b.size < 5.3) continue;
-      if (b.temperament !== a.temperament) continue;
+      // Golden koi can breed with any temperament; others must match
+      if (a.temperament !== 'golden' && b.temperament !== 'golden' && b.temperament !== a.temperament) continue;
       if (t - b.lastBredAt < breedCooldown) continue;
 
       const d = Math.hypot(a.x - b.x, a.y - b.y);
@@ -453,8 +454,14 @@ export function tryBreed(allFish: Koi[], bounds: PondBounds, t: number): BreedRe
         const midY = (a.y + b.y) / 2;
 
         const babies: Koi[] = [];
+        const hasGoldenParent = a.temperament === 'golden' || b.temperament === 'golden';
+        const nonGoldenTemp = a.temperament === 'golden' ? b.temperament : a.temperament;
         for (let k = 0; k < 3; k++) {
-          const baby = createKoi(bounds, a.temperament, {
+          // Golden parent gives each baby a 25% chance of being golden
+          const babyTemp = hasGoldenParent
+            ? (Math.random() < 0.25 ? 'golden' : nonGoldenTemp)
+            : a.temperament;
+          const baby = createKoi(bounds, babyTemp, {
             x: midX + (k - 1) * 5,
             y: midY + (Math.random() - 0.5) * 4,
           });

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192">
+  <rect width="192" height="192" rx="32" fill="#2266AA"/>
+  <ellipse cx="96" cy="106" rx="80" ry="60" fill="#3388CC"/>
+  <!-- koi body -->
+  <ellipse cx="96" cy="96" rx="36" ry="14" fill="#FF6644" transform="rotate(-15 96 96)"/>
+  <!-- tail -->
+  <path d="M128 84 Q142 78 138 96 Q142 114 128 108Z" fill="#FF4422"/>
+  <!-- white patch -->
+  <ellipse cx="82" cy="92" rx="12" ry="8" fill="#FFFFFF" transform="rotate(-15 82 92)"/>
+  <!-- eye -->
+  <circle cx="70" cy="88" r="3" fill="#222222"/>
+  <!-- water ripples -->
+  <path d="M30 70 Q60 60 96 70 Q132 80 162 70" stroke="#FFFFFF" stroke-width="2" fill="none" opacity="0.4"/>
+  <path d="M30 130 Q60 120 96 130 Q132 140 162 130" stroke="#FFFFFF" stroke-width="2" fill="none" opacity="0.3"/>
+</svg>
