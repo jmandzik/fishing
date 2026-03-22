@@ -86,13 +86,6 @@ canvas.addEventListener('mousedown', (e) => {
     fishingState.clickReaction = lastTime;
   }
 
-  if (fishingState.reeling) {
-    // Tug-of-war — each click reels in
-    reelClick(fishingState, lastTime, chest, catfish);
-  } else if (fishingState.active || fishingState.catching) {
-    // Line is out — reel in on click
-    reelIn(fishingState, lastTime, chest);
-  }
 });
 
 canvas.addEventListener('mouseup', (e) => {
@@ -103,8 +96,8 @@ canvas.addEventListener('mouseup', (e) => {
 
   if (isShopOpen(shop) || isSettingsOpen(settings)) return;
 
-  if (y >= bounds.waterTop && !fishingState.active && !fishingState.reeling) {
-    // Clicked in the water — drop food
+  if (y >= bounds.waterTop) {
+    // Clicked in the water — drop food (works even while fishing)
     dropPellet(mouseDownX, mouseDownY, bounds);
   }
 });
