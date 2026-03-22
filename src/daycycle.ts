@@ -143,17 +143,11 @@ export function getSunPosition(t: number, w: number, skyH: number): { x: number;
 export function getMoonPosition(t: number, w: number, skyH: number): { x: number; y: number; visible: boolean } {
   const p = getDayPhase(t);
 
-  if (p < 0.60) return { x: 0, y: 0, visible: false };
+  if (p < 0.62) return { x: 0, y: 0, visible: false };
 
-  // Moon rises from right, arcs across to left during night
-  // Night is 0.65 to 1.0 (wrapping). Also show during late dusk.
-  let moonProgress: number;
-  if (p >= 0.60) {
-    // 0.60 -> 1.0 maps to 0 -> 1
-    moonProgress = (p - 0.60) / 0.40;
-  } else {
-    moonProgress = 0;
-  }
+  // Moon rises from left, arcs across to right during night
+  // Night is 0.65 to 1.0 (wrapping). Start arc at 0.62 so it emerges from behind the bush.
+  const moonProgress = (p - 0.62) / 0.38;
 
   // Arc from behind left trees (0.03) to behind right trees (0.97)
   const x = w * 0.03 + moonProgress * w * 0.94;

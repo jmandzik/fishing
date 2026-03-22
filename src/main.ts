@@ -55,6 +55,7 @@ const baitState = createBaitState();
 let mouseDownY = 0;
 let mouseDownX = 0;
 let mouseIsDown = false;
+let clickConsumedByUI = false;
 
 canvas.addEventListener('mousedown', (e) => {
   initAudio();
@@ -65,15 +66,16 @@ canvas.addEventListener('mousedown', (e) => {
   mouseDownX = x;
   mouseDownY = y;
   mouseIsDown = true;
+  clickConsumedByUI = false;
 
   // Settings click takes priority
-  if (handleSettingsClick(settings, x, y, W, H)) return;
+  if (handleSettingsClick(settings, x, y, W, H)) { clickConsumedByUI = true; return; }
 
   // Shop click takes priority
-  if (handleShopClick(shop, fishingState, x, y, W, H)) return;
+  if (handleShopClick(shop, fishingState, x, y, W, H)) { clickConsumedByUI = true; return; }
 
   // Bait toggle
-  if (handleBaitClick(baitState, x, y, W, H)) return;
+  if (handleBaitClick(baitState, x, y, W, H)) { clickConsumedByUI = true; return; }
 
   // Click a sitting frog to make it jump
   if (clickFrog(x, y, W, H, lastTime)) return;
@@ -97,12 +99,14 @@ canvas.addEventListener('mouseup', (e) => {
   if (!mouseIsDown) return;
   mouseIsDown = false;
 
+  if (clickConsumedByUI) return;
+
   const y = e.clientY / PIXEL_SCALE;
 
   if (isShopOpen(shop) || isSettingsOpen(settings)) return;
 
-  if (y >= bounds.waterTop) {
-    // Clicked in the water — drop food (works even while fishing)
+  if (e.button === 0 && y >= bounds.waterTop) {
+    // Left-clicked in the water — drop food (works even while fishing)
     dropPellet(mouseDownX, mouseDownY, bounds);
   }
 });
@@ -147,7 +151,15 @@ canvas.addEventListener('contextmenu', (e) => {
   e.preventDefault();
   const temp = temperaments[nextTemp % temperaments.length];
   nextTemp++;
-  fish.push(createKoi(bounds, temp));
+  const newFish = createKoi(bounds, temp);
+  const fromLeft = Math.random() > 0.5;
+  newFish.x = fromLeft ? bounds.left + 5 : bounds.right - 5;
+  newFish.y = bounds.waterTop + 10 + Math.random() * 20;
+  newFish.vx = fromLeft ? 0.8 : -0.8;
+  newFish.facingRight = fromLeft;
+  newFish.targetX = bounds.centerX + (Math.random() - 0.5) * (bounds.right - bounds.left) * 0.3;
+  newFish.targetY = (bounds.waterTop + bounds.bowlBottom) / 2 + (Math.random() - 0.5) * 30;
+  fish.push(newFish);
 });
 
 // Start with 5-10 random fish
