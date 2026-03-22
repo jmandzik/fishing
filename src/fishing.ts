@@ -9,6 +9,10 @@ import type { Catfish } from './catfish.ts';
 import { spawnSplash } from './splash.ts';
 import { playCast, playBite, playCatch, playSnap, playCoins, playSplash } from './sounds.ts';
 import { hasEffect } from './shop.ts';
+import { isNighttime } from './daycycle.ts';
+import { getWeatherState } from './weather.ts';
+import { getDuckX } from './ducks.ts';
+import { dropPellet } from './food.ts';
 
 export interface FishingState {
   // Fisherman position (computed from bounds)
@@ -82,6 +86,25 @@ export interface FishingState {
 
   // Cooldown
   canCastAfter: number;
+
+  // Easter eggs
+  sandwichUntil: number;       // 0 = not eating
+  sandwichNextAt: number;      // next sandwich break time
+  sandwichCrumbs: { x: number; y: number; vy: number; life: number }[];
+
+  hatBlownOff: boolean;
+  hatX: number;
+  hatY: number;
+  hatReturning: boolean;
+  hatReturnStart: number;
+  hatReturnFromX: number;
+
+  wavingUntil: number;
+
+  caughtBoot: boolean;
+  bootQuestionUntil: number;   // "?" above head until this time
+
+  clickReaction: number;       // timestamp of last click reaction
 }
 
 export function createFishingState(): FishingState {
@@ -134,6 +157,24 @@ export function createFishingState(): FishingState {
     totalCaught: 0,
     biggestSize: 0,
     totalCoins: 10,
+
+    sandwichUntil: 0,
+    sandwichNextAt: 60000 + Math.random() * 30000,
+    sandwichCrumbs: [],
+
+    hatBlownOff: false,
+    hatX: 0,
+    hatY: 0,
+    hatReturning: false,
+    hatReturnStart: 0,
+    hatReturnFromX: 0,
+
+    wavingUntil: 0,
+
+    caughtBoot: false,
+    bootQuestionUntil: 0,
+
+    clickReaction: 0,
   };
 }
 
@@ -256,30 +297,43 @@ export function reelClick(state: FishingState, t: number, chest?: TreasureChest,
       playCatch();
       playCoins();
     } else if (state.reelingFish) {
-      // Landed a fish!
-      state.caughtChest = false;
-      state.caughtFish = state.reelingFish;
-      state.caughtFish.alive = false;
+      // 1% chance: boot instead of fish!
+      if (Math.random() < 0.01) {
+        state.caughtBoot = true;
+        state.caughtChest = false;
+        state.caughtFish = state.reelingFish;
+        state.caughtFish.alive = false;
+        state.bootQuestionUntil = t + 2000;
+        // No coins, no fish count for a boot
+        spawnSplash(state.bobberX, state.bobberY);
+        playSplash();
+      } else {
+        // Landed a fish!
+        state.caughtBoot = false;
+        state.caughtChest = false;
+        state.caughtFish = state.reelingFish;
+        state.caughtFish.alive = false;
 
-      // If this is the catfish proxy, kill the real catfish too
-      const isCatfish = state.caughtFish.id === -99;
-      if (isCatfish && catfish) {
-        catfish.alive = false;
-      }
+        // If this is the catfish proxy, kill the real catfish too
+        const isCatfish = state.caughtFish.id === -99;
+        if (isCatfish && catfish) {
+          catfish.alive = false;
+        }
 
-      const catchValue = isCatfish ? 3 : (state.caughtFish.temperament === 'golden' ? 2 : 1);
-      state.totalCaught += catchValue;
-      if (state.caughtFish.size > state.biggestSize) {
-        state.biggestSize = state.caughtFish.size;
+        const catchValue = isCatfish ? 3 : (state.caughtFish.temperament === 'golden' ? 2 : 1);
+        state.totalCaught += catchValue;
+        if (state.caughtFish.size > state.biggestSize) {
+          state.biggestSize = state.caughtFish.size;
+        }
+        // Coins: catfish worth 5, golden doubles, others based on size
+        const coinReward = isCatfish ? 5 :
+          Math.max(1, Math.floor(state.caughtFish.size / 5)) * (state.caughtFish.temperament === 'golden' ? 2 : 1);
+        state.totalCoins += coinReward;
+        spawnSplash(state.bobberX, state.bobberY);
+        playSplash();
+        playCatch();
+        playCoins();
       }
-      // Coins: catfish worth 5, golden doubles, others based on size
-      const coinReward = isCatfish ? 5 :
-        Math.max(1, Math.floor(state.caughtFish.size / 5)) * (state.caughtFish.temperament === 'golden' ? 2 : 1);
-      state.totalCoins += coinReward;
-      spawnSplash(state.bobberX, state.bobberY);
-      playSplash();
-      playCatch();
-      playCoins();
     }
     state.reelingFish = null;
     state.reelingChest = false;
@@ -472,6 +526,7 @@ export function updateFishing(state: FishingState, bounds: PondBounds, t: number
       state.catching = false;
       state.caughtFish = null;
       state.caughtChest = false;
+      state.caughtBoot = false;
       state.canCastAfter = t + 1000;
     }
     return;
@@ -597,6 +652,86 @@ export function updateFishing(state: FishingState, bounds: PondBounds, t: number
   }
 }
 
+/** Update fisherman easter egg state — call every frame from main loop */
+export function updateFishermanEasterEggs(state: FishingState, bounds: PondBounds, t: number, dt: number, w: number, h: number) {
+  const pos = getFishermanPos(w, h);
+  const idle = !state.active && !state.casting && !state.charging && !state.reeling &&
+    !state.catching && !state.reelingEmpty && !state.lineBroke;
+  const night = isNighttime(t);
+
+  // --- Sandwich break (every 60-90s while idle, not sleeping) ---
+  if (idle && !night && t > state.sandwichNextAt && state.sandwichUntil === 0) {
+    state.sandwichUntil = t + 3000;
+    state.sandwichNextAt = t + 3000 + 60000 + Math.random() * 30000;
+  }
+  // Sandwich crumbs fall into water
+  if (state.sandwichUntil > 0 && t < state.sandwichUntil) {
+    if (Math.random() < 0.03 * (dt / 16)) {
+      state.sandwichCrumbs.push({
+        x: pos.dockLeft - 2 + Math.random() * 4,
+        y: bounds.waterTop - 2,
+        vy: 0.2 + Math.random() * 0.3,
+        life: 1,
+      });
+    }
+  }
+  // After sandwich: spawn 1-2 food pellets at dock edge
+  if (state.sandwichUntil > 0 && t >= state.sandwichUntil) {
+    const crumbCount = 1 + Math.floor(Math.random() * 2);
+    for (let i = 0; i < crumbCount; i++) {
+      dropPellet(pos.dockLeft - 3 + Math.random() * 6, bounds.waterTop, bounds);
+    }
+    state.sandwichUntil = 0;
+  }
+  // Update crumb particles
+  for (let i = state.sandwichCrumbs.length - 1; i >= 0; i--) {
+    const c = state.sandwichCrumbs[i];
+    c.y += c.vy * (dt / 16);
+    c.life -= 0.008 * (dt / 16);
+    if (c.life <= 0 || c.y > bounds.waterTop + 15) {
+      state.sandwichCrumbs.splice(i, 1);
+    }
+  }
+
+  // --- Hat blows off in storms ---
+  const weather = getWeatherState();
+  if (weather === 'storm' && !state.hatBlownOff && !state.hatReturning) {
+    state.hatBlownOff = true;
+    state.hatX = pos.seatX;
+    state.hatY = bounds.waterTop;
+  }
+  if (state.hatBlownOff) {
+    // Drift left slowly on water surface
+    state.hatX -= 0.15 * (dt / 16);
+    state.hatY = bounds.waterTop + Math.sin(t * 0.004) * 0.5;
+    // Clamp to pond
+    if (state.hatX < bounds.left + 10) state.hatX = bounds.left + 10;
+  }
+  // When storm ends, hat returns
+  if (weather !== 'storm' && state.hatBlownOff && !state.hatReturning) {
+    state.hatReturning = true;
+    state.hatReturnStart = t;
+    state.hatReturnFromX = state.hatX;
+    state.hatBlownOff = false;
+  }
+  if (state.hatReturning) {
+    const returnProg = Math.min((t - state.hatReturnStart) / 2000, 1);
+    state.hatX = state.hatReturnFromX + (pos.seatX - state.hatReturnFromX) * returnProg;
+    state.hatY = bounds.waterTop + (pos.dockY - 17 - bounds.waterTop) * returnProg;
+    if (returnProg >= 1) {
+      state.hatReturning = false;
+    }
+  }
+
+  // --- Wave at ducks ---
+  const duckX = getDuckX();
+  if (duckX !== null && idle && state.wavingUntil < t) {
+    if (Math.abs(duckX - bounds.right) < 25) {
+      state.wavingUntil = t + 1000;
+    }
+  }
+}
+
 // --- Drawing ---
 
 export function drawDock(ctx: CanvasRenderingContext2D, w: number, h: number) {
@@ -646,10 +781,25 @@ export function drawDock(ctx: CanvasRenderingContext2D, w: number, h: number) {
 
 export function drawFisherman(ctx: CanvasRenderingContext2D, state: FishingState, w: number, h: number, t: number) {
   const pos = getFishermanPos(w, h);
+  const night = isNighttime(t);
+  const idle = !state.active && !state.casting && !state.charging && !state.reeling &&
+    !state.catching && !state.reelingEmpty && !state.lineBroke;
+  const sleeping = night && idle;
+  const waving = t < state.wavingUntil;
+  const eating = state.sandwichUntil > 0 && t < state.sandwichUntil;
+
+  // Click reaction: jump + hat tip
+  const clickAge = t - state.clickReaction;
+  const clicking = state.clickReaction > 0 && clickAge < 500;
+  const jumpOffset = clicking ? Math.max(0, 2 - clickAge * 0.008) : 0;
+  const hatLift = clicking ? Math.max(0, 2 - clickAge * 0.004) : 0;
 
   // Fisherman sits on the dock edge, facing left
   const fx = pos.seatX;
-  const fy = pos.dockY - 2;
+  const fy = pos.dockY - 2 - jumpOffset;
+
+  // Head droop for sleeping
+  const headDroop = sleeping ? 2 : 0;
 
   // --- Legs (dangling off dock) ---
   ctx.fillStyle = '#4A5A3A'; // pants
@@ -665,32 +815,129 @@ export function drawFisherman(ctx: CanvasRenderingContext2D, state: FishingState
   ctx.fillRect(fx - 3, fy - 8, 7, 8);
 
   // --- Arms ---
-  // Back arm (holding rod)
-  ctx.fillStyle = '#DDAA77'; // skin
-  ctx.fillRect(fx - 5, fy - 7, 3, 2);
-  // Front arm resting
-  ctx.fillStyle = '#DDAA77';
-  ctx.fillRect(fx + 4, fy - 5, 2, 3);
+  if (waving) {
+    // Waving arm: one arm raises up with oscillation
+    ctx.fillStyle = '#DDAA77';
+    ctx.fillRect(fx - 5, fy - 7, 3, 2); // back arm normal
+    const waveOff = Math.sin(t * 0.015) * 2;
+    ctx.fillRect(fx + 4, fy - 10 + waveOff, 2, 3); // front arm raised
+  } else if (state.hatBlownOff && !state.hatReturning) {
+    // Reaching up for hat occasionally
+    ctx.fillStyle = '#DDAA77';
+    ctx.fillRect(fx - 5, fy - 7, 3, 2);
+    const reachUp = Math.sin(t * 0.003) > 0.7;
+    ctx.fillRect(fx + 4, reachUp ? fy - 10 : fy - 5, 2, 3);
+  } else if (eating) {
+    // Sandwich hand near mouth
+    ctx.fillStyle = '#DDAA77';
+    ctx.fillRect(fx - 5, fy - 7, 3, 2); // back arm
+    ctx.fillRect(fx - 2, fy - 10, 2, 3); // front arm toward mouth
+    // Tiny sandwich (brown rectangle near hand)
+    ctx.fillStyle = '#8B6914';
+    ctx.fillRect(fx - 3, fy - 11, 3, 2);
+    ctx.fillStyle = '#A08030';
+    ctx.fillRect(fx - 3, fy - 10, 3, 1);
+  } else {
+    // Back arm (holding rod)
+    ctx.fillStyle = '#DDAA77';
+    ctx.fillRect(fx - 5, fy - 7, 3, 2);
+    // Front arm resting
+    ctx.fillStyle = '#DDAA77';
+    ctx.fillRect(fx + 4, fy - 5, 2, 3);
+  }
 
   // --- Head ---
   ctx.fillStyle = '#DDAA77';
-  ctx.fillRect(fx - 1, fy - 13, 5, 5);
+  ctx.fillRect(fx - 1, fy - 13 + headDroop, 5, 5);
 
   // Eye
-  ctx.fillStyle = '#111111';
-  ctx.fillRect(fx - 1, fy - 11, 1, 1);
+  if (sleeping) {
+    // Closed eye
+    ctx.fillStyle = '#111111';
+    ctx.fillRect(fx - 1, fy - 10 + headDroop, 2, 0.5);
+  } else {
+    ctx.fillStyle = '#111111';
+    ctx.fillRect(fx - 1, fy - 11, 1, 1);
+  }
 
   // --- Hat ---
-  ctx.fillStyle = '#886633';
-  ctx.fillRect(fx - 3, fy - 15, 8, 2); // brim
-  ctx.fillRect(fx - 1, fy - 17, 5, 2); // top
+  if (!state.hatBlownOff && !state.hatReturning) {
+    ctx.fillStyle = '#886633';
+    ctx.fillRect(fx - 3, fy - 15 + headDroop - hatLift, 8, 2); // brim
+    ctx.fillRect(fx - 1, fy - 17 + headDroop - hatLift, 5, 2); // top
+  }
+
+  // Hat on water (blown off)
+  if (state.hatBlownOff) {
+    ctx.fillStyle = '#886633';
+    ctx.fillRect(state.hatX - 4, state.hatY - 2, 8, 2);
+    ctx.fillRect(state.hatX - 2, state.hatY - 4, 5, 2);
+  }
+  // Hat returning
+  if (state.hatReturning) {
+    ctx.fillStyle = '#886633';
+    ctx.fillRect(state.hatX - 4, state.hatY - 2, 8, 2);
+    ctx.fillRect(state.hatX - 2, state.hatY - 4, 5, 2);
+  }
+
+  // --- Sleeping zzz ---
+  if (sleeping) {
+    const zBob = Math.sin(t * 0.004) * 2;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.globalAlpha = 0.7;
+    ctx.font = '5px monospace';
+    ctx.fillText('z', fx + 6, fy - 16 + zBob);
+    ctx.font = '4px monospace';
+    ctx.fillText('z', fx + 9, fy - 20 + zBob * 0.7);
+    ctx.font = '3px monospace';
+    ctx.fillText('z', fx + 11, fy - 23 + zBob * 0.5);
+    ctx.globalAlpha = 1;
+  }
+
+  // --- Boot question mark ---
+  if (t < state.bootQuestionUntil) {
+    const qAlpha = Math.max(0, 1 - (t - (state.bootQuestionUntil - 2000)) / 2000);
+    ctx.save();
+    ctx.globalAlpha = qAlpha;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = '6px monospace';
+    ctx.fillText('?', fx + 1, fy - 20);
+    ctx.restore();
+  }
+
+  // --- Click reaction "!" speech bubble ---
+  if (clicking) {
+    const bubbleAlpha = Math.max(0, 1 - clickAge / 500);
+    ctx.save();
+    ctx.globalAlpha = bubbleAlpha;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.arc(fx - 6, fy - 18, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#333333';
+    ctx.font = '5px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('!', fx - 6, fy - 16);
+    ctx.textAlign = 'start';
+    ctx.restore();
+  }
+
+  // --- Sandwich crumbs ---
+  for (const c of state.sandwichCrumbs) {
+    ctx.save();
+    ctx.globalAlpha = c.life;
+    ctx.fillStyle = '#8B6914';
+    ctx.fillRect(c.x, c.y, 1, 1);
+    ctx.restore();
+  }
 
   // --- Fishing Rod (rotates with rodAngle) ---
   const handX = fx - 5;
   const handY = fy - 6;
   const rodLen = 30;
   const baseAngle = -2.2; // default: pointing up-left
-  const angle = baseAngle + state.rodAngle;
+  const sleepSag = sleeping ? 0.3 : 0;
+  const angle = baseAngle + state.rodAngle + sleepSag;
 
   // Rod tip position based on angle
   const tipX = handX + Math.cos(angle) * rodLen;
@@ -911,6 +1158,19 @@ export function drawFishing(ctx: CanvasRenderingContext2D, state: FishingState, 
       ctx.beginPath();
       ctx.arc(-7, -3, 1.5, 0, Math.PI * 2);
       ctx.fill();
+    } else if (state.caughtBoot) {
+      // Boot flying up
+      ctx.rotate(prog * 0.4);
+      ctx.fillStyle = '#5A3A1A';
+      // Boot sole
+      ctx.fillRect(-4, 2, 8, 3);
+      // Boot shaft
+      ctx.fillRect(-3, -4, 5, 6);
+      // Boot toe
+      ctx.fillRect(3, 0, 3, 3);
+      // Lace
+      ctx.fillStyle = '#8A6A3A';
+      ctx.fillRect(-2, -2, 3, 1);
     } else if (state.caughtFish) {
       // Fish flying up
       ctx.rotate(prog * Math.PI * 0.5);
@@ -1012,24 +1272,25 @@ export function drawFishing(ctx: CanvasRenderingContext2D, state: FishingState, 
   }
 }
 
-export function drawScore(ctx: CanvasRenderingContext2D, state: FishingState) {
+export function drawScore(ctx: CanvasRenderingContext2D, state: FishingState, _w: number, h: number) {
   if (state.totalCaught === 0 && state.totalCoins === 0 && !state.active) return;
 
+  const y0 = h - 28;
   ctx.save();
   ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
-  ctx.fillRect(4, 4, 56, 24);
+  ctx.fillRect(4, y0, 56, 24);
 
   ctx.fillStyle = '#FFFFFF';
   ctx.font = '6px monospace';
-  ctx.fillText(`Fish: ${state.totalCaught}`, 7, 11);
+  ctx.fillText(`Fish: ${state.totalCaught}`, 7, y0 + 7);
 
   ctx.fillStyle = '#FFD700';
-  ctx.fillText(`Coins: ${state.totalCoins}`, 7, 19);
+  ctx.fillText(`Coins: ${state.totalCoins}`, 7, y0 + 15);
 
   if (state.biggestSize > 0) {
     ctx.fillStyle = '#AAAAAA';
     ctx.font = '5px monospace';
-    ctx.fillText(`Best: ${state.biggestSize.toFixed(0)}`, 7, 25);
+    ctx.fillText(`Best: ${state.biggestSize.toFixed(0)}`, 7, y0 + 21);
   }
   ctx.restore();
 }

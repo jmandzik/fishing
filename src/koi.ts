@@ -427,16 +427,20 @@ export interface BreedResult {
 export function tryBreed(allFish: Koi[], bounds: PondBounds, t: number): BreedResult | null {
   if (allFish.length >= 20) return null;
 
+  // Breeding cooldown is shorter when population is low
+  const aliveCount = allFish.filter(f => f.alive && !f.dead).length;
+  const breedCooldown = aliveCount < 5 ? 8000 : 20000;
+
   for (let i = 0; i < allFish.length; i++) {
     const a = allFish[i];
     if (!a.alive || a.dead || a.hunger > 0.5 || a.size < 5.3) continue;
-    if (t - a.lastBredAt < 20000) continue;
+    if (t - a.lastBredAt < breedCooldown) continue;
 
     for (let j = i + 1; j < allFish.length; j++) {
       const b = allFish[j];
       if (!b.alive || b.dead || b.hunger > 0.5 || b.size < 5.3) continue;
       if (b.temperament !== a.temperament) continue;
-      if (t - b.lastBredAt < 20000) continue;
+      if (t - b.lastBredAt < breedCooldown) continue;
 
       const d = Math.hypot(a.x - b.x, a.y - b.y);
       if (d < 15) {

@@ -12,13 +12,17 @@ import { createSnail, updateSnail, drawSnail } from './snail.ts';
 import { createCrayfish, updateCrayfish, drawCrayfish } from './crayfish.ts';
 import { createCatfish, updateCatfish, drawCatfish } from './catfish.ts';
 import { createHeron, updateHeron, drawHeron, scareHeron } from './heron.ts';
-import { createFishingState, startCharge, releaseCharge, reelIn, reelClick, updateFishing, drawDock, drawFisherman, drawFishing, drawScore } from './fishing.ts';
+import { createFishingState, startCharge, releaseCharge, reelIn, reelClick, updateFishing, updateFishermanEasterEggs, drawDock, drawFisherman, drawFishing, drawScore } from './fishing.ts';
 import { createTreasureChest, respawnChest, drawTreasureChest } from './treasure.ts';
 import { createShop, isShopOpen, drawShopButton, drawShop, handleShopClick } from './shop.ts';
 import { updateAmbientSounds } from './sounds.ts';
 import { isNighttime, adjustDayCycle } from './daycycle.ts';
+import { updateWeather, drawWeatherSky, drawWeatherEffects } from './weather.ts';
 import { createSettings, isSettingsOpen, drawSettingsButton, drawSettings, handleSettingsClick } from './settings.ts';
 import { initAudio, playAmbient } from './sounds.ts';
+import { updateButterflies, drawFlowers, drawButterflies } from './butterflies.ts';
+import { updateDucks, drawDucks } from './ducks.ts';
+import { updateTadpoles, drawTadpoles } from './tadpoles.ts';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
@@ -72,6 +76,14 @@ canvas.addEventListener('mousedown', (e) => {
   // Scare heron if it's hovering or diving
   if (heron.state === 'hovering' || heron.state === 'diving') {
     scareHeron(heron, lastTime);
+  }
+
+  // Click on fisherman — easter egg reaction
+  const fmPos = getPondBounds(W, H);
+  const fishermanX = fmPos.right + 8;
+  const fishermanY = fmPos.waterTop - 5;
+  if (Math.hypot(x - fishermanX, y - fishermanY) < 15) {
+    fishingState.clickReaction = lastTime;
   }
 
   if (fishingState.reeling) {
@@ -162,6 +174,7 @@ const heron = createHeron();
 
 // Golden koi spawning tracker
 let lastGoldenSpawn = 0;
+let lastRestockTime = 0;
 
 // Treasure chest
 const chest = createTreasureChest(bounds);
@@ -214,6 +227,8 @@ function loop(rawT: number) {
   }
 
   drawPond(ctx, W, H, t);
+  drawFlowers(ctx, W, H, t);           // flowers on ground near trees
+  drawWeatherSky(ctx, W, H, t);
   drawDock(ctx, W, H);         // dock behind decorations/fish
   drawDecorations(ctx, W, H, t);
   drawTreasureChest(ctx, chest, t);
@@ -228,6 +243,9 @@ function loop(rawT: number) {
   updateDragonflies(dt, t, W, H);
   updateFireflies(dt, t, W, H);
   updateFrogs(dt, t, W, H);
+  updateButterflies(dt, t, W, H);
+  updateDucks(dt, t, W, H);
+  updateTadpoles(dt, t, W, H);
 
   // Remove fully dead fish
   for (let i = fish.length - 1; i >= 0; i--) {
@@ -238,9 +256,47 @@ function loop(rawT: number) {
   if (t - lastGoldenSpawn > 60000) {
     const goldenCount = fish.filter(f => f.alive && !f.dead && f.temperament === 'golden').length;
     if (goldenCount < 2) {
-      fish.push(createKoi(bounds, 'golden'));
+      const golden = createKoi(bounds, 'golden');
+      if (chest.visible) {
+        // Spawn from behind the treasure chest, aimed toward center
+        golden.x = chest.x;
+        golden.y = chest.y;
+        const toCenterX = bounds.centerX - chest.x;
+        const toCenterY = (bounds.waterTop + bounds.bowlBottom) / 2 - chest.y;
+        const dist = Math.sqrt(toCenterX * toCenterX + toCenterY * toCenterY);
+        golden.vx = dist > 0 ? (toCenterX / dist) * 1.2 : 0;
+        golden.vy = dist > 0 ? (toCenterY / dist) * 0.8 : -0.5;
+        golden.facingRight = golden.vx > 0;
+      } else {
+        // Spawn at pond edge (like restock fish)
+        const fromLeft = Math.random() > 0.5;
+        golden.x = fromLeft ? bounds.left + 5 : bounds.right - 5;
+        golden.y = bounds.waterTop + 10 + Math.random() * 20;
+        golden.vx = fromLeft ? 0.8 : -0.8;
+        golden.facingRight = fromLeft;
+      }
+      golden.targetX = bounds.centerX + (Math.random() - 0.5) * (bounds.right - bounds.left) * 0.3;
+      golden.targetY = (bounds.waterTop + bounds.bowlBottom) / 2 + (Math.random() - 0.5) * 30;
+      fish.push(golden);
       lastGoldenSpawn = t;
     }
+  }
+
+  // Minimum population — new fish swim in from the edge
+  const aliveFish = fish.filter(f => f.alive && !f.dead).length;
+  if (aliveFish < 3 && t - lastRestockTime > 15000) {
+    const fromLeft = Math.random() > 0.5;
+    const entryX = fromLeft ? bounds.left + 5 : bounds.right - 5;
+    const entryY = bounds.waterTop + 10 + Math.random() * 20;
+    const newFish = createKoi(bounds);
+    newFish.x = entryX;
+    newFish.y = entryY;
+    newFish.vx = fromLeft ? 0.8 : -0.8;
+    newFish.facingRight = fromLeft;
+    newFish.targetX = bounds.centerX + (Math.random() - 0.5) * (bounds.right - bounds.left) * 0.3;
+    newFish.targetY = (bounds.waterTop + bounds.bowlBottom) / 2 + (Math.random() - 0.5) * 30;
+    fish.push(newFish);
+    lastRestockTime = t;
   }
 
   // Breeding
@@ -265,7 +321,10 @@ function loop(rawT: number) {
   updateHeron(heron, bounds, t, dt, fish);
   updateBoneParticles(dt);
   updateFishing(fishingState, bounds, t, dt, fish, turtle, W, H, chest, catfish);
+  updateFishermanEasterEggs(fishingState, bounds, t, dt, W, H);
+  updateWeather(dt, t, W, H);
 
+  drawTadpoles(ctx, t);               // tadpoles near bottom, before fish
   drawSnail(ctx, snail, t);
   drawCrayfish(ctx, crayfish, t);
   drawCrayfish(ctx, crayfish2, t);
@@ -281,17 +340,20 @@ function loop(rawT: number) {
   drawSplashes(ctx);
   drawRipples(ctx);
   drawFrogsSwimming(ctx, t);       // frogs in water, after fish
+  drawDucks(ctx, t);                  // ducks on water surface
   drawDragonflies(ctx, t);         // dragonflies above water
+  drawButterflies(ctx, t);         // butterflies near trees
   drawFireflies(ctx, t);           // fireflies at night
   drawHearts(ctx);
   drawFishing(ctx, fishingState, t);
   drawFisherman(ctx, fishingState, W, H, t);  // fisherman on top of everything
   drawHeron(ctx, heron, t);                   // heron on top of everything
-  drawScore(ctx, fishingState);
+  drawScore(ctx, fishingState, W, H);
   drawShopButton(ctx, W, H);
   drawShop(ctx, shop, fishingState, W, H);
   drawSettingsButton(ctx, W, H);
   drawSettings(ctx, settings, W, H);
+  drawWeatherEffects(ctx, W, H, t);
 
   // Ambient nature sounds
   updateAmbientSounds(t, isNighttime(t));

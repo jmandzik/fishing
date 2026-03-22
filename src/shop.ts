@@ -65,12 +65,12 @@ const BUTTON_W = 28;
 const BUTTON_H = 10;
 const BUTTON_PAD = 4;
 
-function getButtonRect(w: number) {
-  return { x: w - BUTTON_W - BUTTON_PAD, y: BUTTON_PAD, w: BUTTON_W, h: BUTTON_H };
+function getButtonRect(w: number, h: number) {
+  return { x: w - BUTTON_W - BUTTON_PAD, y: h - BUTTON_H - BUTTON_PAD, w: BUTTON_W, h: BUTTON_H };
 }
 
-export function drawShopButton(ctx: CanvasRenderingContext2D, w: number, _h: number): void {
-  const btn = getButtonRect(w);
+export function drawShopButton(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+  const btn = getButtonRect(w, h);
 
   // Button background
   ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
@@ -169,7 +169,7 @@ export function drawShop(ctx: CanvasRenderingContext2D, shop: ShopState, fishing
 // --- Click handling ---
 
 export function handleShopClick(shop: ShopState, fishingState: FishingState, x: number, y: number, w: number, h: number): boolean {
-  const btn = getButtonRect(w);
+  const btn = getButtonRect(w, h);
 
   // Check shop button click
   if (x >= btn.x && x <= btn.x + btn.w && y >= btn.y && y <= btn.y + btn.h) {

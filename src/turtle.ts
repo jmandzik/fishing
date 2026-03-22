@@ -119,8 +119,8 @@ export function createTurtle(bounds: PondBounds): Turtle {
 function pickTarget(turtle: Turtle, bounds: PondBounds) {
   const midY = (bounds.waterTop + bounds.bowlBottom) / 2;
   for (let i = 0; i < 20; i++) {
-    const tx = bounds.centerX + (Math.random() - 0.5) * (bounds.right - bounds.left) * 0.6;
-    const ty = midY + (Math.random() - 0.5) * (bounds.bowlBottom - bounds.waterTop) * 0.4;
+    const tx = bounds.centerX + (Math.random() - 0.5) * (bounds.right - bounds.left) * 0.9;
+    const ty = midY + (Math.random() - 0.5) * (bounds.bowlBottom - bounds.waterTop) * 0.7;
     if (isInWater(tx, ty, bounds)) {
       turtle.targetX = tx;
       turtle.targetY = ty;

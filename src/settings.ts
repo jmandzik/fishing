@@ -14,17 +14,17 @@ const BUTTON_W = 16;
 const BUTTON_H = 10;
 const BUTTON_MARGIN = 4;
 
-function getButtonRect(_w: number) {
-  // Below the shop button area, top-right
-  return { x: _w - BUTTON_W - BUTTON_MARGIN, y: 16, w: BUTTON_W, h: BUTTON_H };
+function getButtonRect(w: number, h: number) {
+  // Above the shop button, bottom-right
+  return { x: w - BUTTON_W - BUTTON_MARGIN, y: h - BUTTON_H - BUTTON_MARGIN - 14, w: BUTTON_W, h: BUTTON_H };
 }
 
 export function isSettingsOpen(s: SettingsState): boolean {
   return s.open;
 }
 
-export function drawSettingsButton(ctx: CanvasRenderingContext2D, w: number, _h: number) {
-  const btn = getButtonRect(w);
+export function drawSettingsButton(ctx: CanvasRenderingContext2D, w: number, h: number) {
+  const btn = getButtonRect(w, h);
   ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
   ctx.fillRect(btn.x, btn.y, btn.w, btn.h);
   ctx.strokeStyle = '#AAAAAA';
@@ -56,7 +56,7 @@ export function drawSettings(ctx: CanvasRenderingContext2D, settings: SettingsSt
   const panelW = Math.min(w * 0.35, 80);
   const panelH = 20 + toggles.length * 14;
   const panelX = w - panelW - 4;
-  const panelY = 28;
+  const panelY = h - panelH - 30; // opens upward from buttons
 
   // Background
   ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
@@ -92,11 +92,11 @@ export function drawSettings(ctx: CanvasRenderingContext2D, settings: SettingsSt
     ctx.fillText(item.label, panelX + 14, iy + 6);
   }
 
-  void h; // satisfy noUnusedParameters
+  // panel uses w and h above
 }
 
-export function handleSettingsClick(settings: SettingsState, x: number, y: number, w: number, _h: number): boolean {
-  const btn = getButtonRect(w);
+export function handleSettingsClick(settings: SettingsState, x: number, y: number, w: number, h: number): boolean {
+  const btn = getButtonRect(w, h);
 
   // Check button click
   if (x >= btn.x && x <= btn.x + btn.w && y >= btn.y && y <= btn.y + btn.h) {
@@ -107,8 +107,9 @@ export function handleSettingsClick(settings: SettingsState, x: number, y: numbe
   if (!settings.open) return false;
 
   const panelW = Math.min(w * 0.35, 80);
+  const panelH = 20 + toggles.length * 14;
   const panelX = w - panelW - 4;
-  const panelY = 28;
+  const panelY = h - panelH - 30;
 
   // Check toggle clicks
   for (let i = 0; i < toggles.length; i++) {
