@@ -1,13 +1,24 @@
 // Ducks — mother duck with ducklings swimming on the water surface
+// Periodically walks onto land on the left side, wanders off-screen, then returns
 
 import { getPondBounds } from './pond.ts';
 import { isNighttime } from './daycycle.ts';
 import { spawnRipple } from './ripples.ts';
+import { spawnSplash } from './splash.ts';
 
 interface Duckling {
   offsetX: number;    // offset behind mother (negative = behind)
   bobPhase: number;
 }
+
+type DuckPhase =
+  | 'swimming'          // normal water behavior
+  | 'walking_to_shore'  // swimming toward left edge
+  | 'climbing_out'      // short transition climbing onto land
+  | 'walking_offscreen' // walking left on land until off-screen
+  | 'offscreen'         // gone for a while
+  | 'walking_back'      // walking right on land from off-screen
+  | 'jumping_in';       // arc into water with splash
 
 interface DuckState {
   x: number;
@@ -27,6 +38,17 @@ interface DuckState {
   honkTimer: number;
   // Ripple timer
   lastRipple: number;
+  // Land walking state machine
+  phase: DuckPhase;
+  phaseTimer: number;     // general-purpose timer for current phase
+  landY: number;          // y position when on land
+  walkCycle: number;      // leg animation phase
+  jumpProgress: number;   // 0..1 for jump arc
+  jumpStartX: number;
+  jumpStartY: number;
+  jumpTargetX: number;
+  jumpTargetY: number;
+  shoreTimer: number;     // time until next shore trip
 }
 
 let duck: DuckState | null = null;
@@ -63,6 +85,16 @@ function init(w: number, h: number) {
     honkUntil: 0,
     honkTimer: 20000 + Math.random() * 15000,
     lastRipple: 0,
+    phase: 'swimming',
+    phaseTimer: 0,
+    landY: b.waterTop,
+    walkCycle: 0,
+    jumpProgress: 0,
+    jumpStartX: 0,
+    jumpStartY: 0,
+    jumpTargetX: 0,
+    jumpTargetY: 0,
+    shoreTimer: 40000 + Math.random() * 30000, // first trip in 40-70s
   };
 }
 
@@ -73,68 +105,254 @@ export function updateDucks(dt: number, t: number, w: number, h: number) {
   const b = getPondBounds(w, h);
   const night = isNighttime(t);
 
-  duck.y = b.waterTop;
-  duck.bobPhase += dt * 0.003;
+  const shoreX = b.left + 8; // where land meets water on the left
 
-  if (night) {
-    // Sleeping: slow to a stop, cluster together
-    duck.speed *= 0.98;
-    if (duck.speed < 0.01) duck.speed = 0;
-  } else {
-    duck.speed = 0.15;
+  switch (duck.phase) {
+    case 'swimming': {
+      duck.y = b.waterTop;
+      duck.bobPhase += dt * 0.003;
 
-    // Direction change timer
-    duck.dirTimer -= dt;
-    if (duck.dirTimer <= 0) {
-      duck.facingRight = !duck.facingRight;
-      duck.dirTimer = 10000 + Math.random() * 10000;
+      if (night) {
+        duck.speed *= 0.98;
+        if (duck.speed < 0.01) duck.speed = 0;
+      } else {
+        duck.speed = 0.15;
+
+        // Shore trip timer
+        duck.shoreTimer -= dt;
+        if (duck.shoreTimer <= 0) {
+          duck.phase = 'walking_to_shore';
+          duck.facingRight = false; // face left toward shore
+          duck.speed = 0.2;
+          break;
+        }
+
+        // Direction change timer
+        duck.dirTimer -= dt;
+        if (duck.dirTimer <= 0) {
+          duck.facingRight = !duck.facingRight;
+          duck.dirTimer = 10000 + Math.random() * 10000;
+        }
+
+        // Head dip timer
+        duck.headDipTimer -= dt;
+        if (duck.headDipTimer <= 0 && !duck.headDipping) {
+          duck.headDipping = true;
+          duck.headDipStart = t;
+          duck.headDipTimer = 15000 + Math.random() * 10000;
+        }
+        if (duck.headDipping && t - duck.headDipStart > 600) {
+          duck.headDipping = false;
+        }
+
+        // Honk timer
+        duck.honkTimer -= dt;
+        if (duck.honkTimer <= 0) {
+          duck.honkUntil = t + 800;
+          duck.honkTimer = 20000 + Math.random() * 15000;
+        }
+      }
+
+      // Move
+      const dir = duck.facingRight ? 1 : -1;
+      duck.x += dir * duck.speed * (dt / 16);
+
+      // Bounce at bounds
+      const minX = b.left + 20;
+      const maxX = b.right - 20;
+      if (duck.x < minX) { duck.x = minX; duck.facingRight = true; }
+      if (duck.x > maxX) { duck.x = maxX; duck.facingRight = false; }
+
+      // Ripples while moving
+      if (!night && duck.speed > 0.05 && t - duck.lastRipple > 2000) {
+        spawnRipple(duck.x, duck.y);
+        duck.lastRipple = t;
+      }
+
+      // Update duckling positions — follow with delay
+      updateDucklingPositions(dt, b.waterTop);
+      break;
     }
 
-    // Head dip timer
-    duck.headDipTimer -= dt;
-    if (duck.headDipTimer <= 0 && !duck.headDipping) {
-      duck.headDipping = true;
-      duck.headDipStart = t;
-      duck.headDipTimer = 15000 + Math.random() * 10000;
-    }
-    if (duck.headDipping && t - duck.headDipStart > 600) {
-      duck.headDipping = false;
+    case 'walking_to_shore': {
+      duck.y = b.waterTop;
+      duck.bobPhase += dt * 0.003;
+      duck.facingRight = false;
+      duck.x -= 0.2 * (dt / 16);
+
+      // Ripples while swimming to shore
+      if (t - duck.lastRipple > 1500) {
+        spawnRipple(duck.x, duck.y);
+        duck.lastRipple = t;
+      }
+
+      // Reached the shore
+      if (duck.x <= shoreX + 5) {
+        duck.x = shoreX + 5;
+        duck.phase = 'climbing_out';
+        duck.phaseTimer = 500; // half second climb
+        duck.landY = b.waterTop;
+      }
+
+      updateDucklingPositions(dt, b.waterTop);
+      break;
     }
 
-    // Honk timer
-    duck.honkTimer -= dt;
-    if (duck.honkTimer <= 0) {
-      duck.honkUntil = t + 800;
-      duck.honkTimer = 20000 + Math.random() * 15000;
+    case 'climbing_out': {
+      // Short transition: rise from water level to land level
+      duck.phaseTimer -= dt;
+      const climbProgress = 1 - Math.max(0, duck.phaseTimer / 500);
+      // Rise up a few pixels above waterTop (standing on shore)
+      duck.landY = b.waterTop - climbProgress * 4;
+      duck.y = duck.landY;
+      duck.x -= 0.05 * (dt / 16); // slight leftward drift
+
+      if (duck.phaseTimer <= 0) {
+        duck.phase = 'walking_offscreen';
+        duck.facingRight = false;
+        duck.landY = b.waterTop - 4;
+        duck.y = duck.landY;
+        duck.walkCycle = 0;
+      }
+
+      // Ducklings climb too
+      for (let i = 0; i < duck.ducklings.length; i++) {
+        const pos = duck.ducklingPositions[i];
+        const targetX = duck.x + (8 + i * 6); // behind mother (she's facing left)
+        pos.x += (targetX - pos.x) * 0.03 * (dt / 16);
+        pos.y += (duck.y - pos.y) * 0.03 * (dt / 16);
+      }
+      break;
+    }
+
+    case 'walking_offscreen': {
+      duck.y = duck.landY;
+      duck.facingRight = false;
+      duck.walkCycle += dt * 0.008;
+      duck.x -= 0.25 * (dt / 16);
+
+      // Ducklings follow on land
+      for (let i = 0; i < duck.ducklings.length; i++) {
+        const pos = duck.ducklingPositions[i];
+        const targetX = duck.x + (8 + i * 6);
+        pos.x += (targetX - pos.x) * 0.025 * (dt / 16);
+        pos.y += (duck.landY - pos.y) * 0.05 * (dt / 16);
+      }
+
+      // All off-screen? (mother + last duckling)
+      const lastDucklingPos = duck.ducklingPositions[duck.ducklings.length - 1];
+      if (duck.x < -10 && lastDucklingPos.x < -5) {
+        duck.phase = 'offscreen';
+        duck.phaseTimer = 15000 + Math.random() * 20000; // gone 15-35s
+      }
+      break;
+    }
+
+    case 'offscreen': {
+      duck.phaseTimer -= dt;
+      if (duck.phaseTimer <= 0) {
+        // Time to come back
+        duck.phase = 'walking_back';
+        duck.x = -10;
+        duck.landY = b.waterTop - 4;
+        duck.y = duck.landY;
+        duck.facingRight = true;
+        duck.walkCycle = 0;
+        // Reset duckling positions off-screen
+        for (let i = 0; i < duck.ducklings.length; i++) {
+          duck.ducklingPositions[i].x = -10 - (8 + i * 6);
+          duck.ducklingPositions[i].y = duck.landY;
+        }
+      }
+      break;
+    }
+
+    case 'walking_back': {
+      duck.y = duck.landY;
+      duck.facingRight = true;
+      duck.walkCycle += dt * 0.008;
+      duck.x += 0.25 * (dt / 16);
+
+      // Ducklings follow on land
+      for (let i = 0; i < duck.ducklings.length; i++) {
+        const pos = duck.ducklingPositions[i];
+        const targetX = duck.x - (8 + i * 6); // behind mother (she's facing right)
+        pos.x += (targetX - pos.x) * 0.025 * (dt / 16);
+        pos.y += (duck.landY - pos.y) * 0.05 * (dt / 16);
+      }
+
+      // Reached the shore edge — time to jump in
+      if (duck.x >= shoreX + 5) {
+        duck.phase = 'jumping_in';
+        duck.jumpProgress = 0;
+        duck.jumpStartX = duck.x;
+        duck.jumpStartY = duck.landY;
+        duck.jumpTargetX = duck.x + 15; // land a bit into the water
+        duck.jumpTargetY = b.waterTop;
+      }
+      break;
+    }
+
+    case 'jumping_in': {
+      duck.jumpProgress += dt * 0.002; // ~500ms jump
+      if (duck.jumpProgress >= 1) {
+        duck.jumpProgress = 1;
+        // Splash!
+        spawnSplash(duck.jumpTargetX, duck.jumpTargetY);
+        spawnRipple(duck.jumpTargetX, duck.jumpTargetY);
+
+        // Back to swimming
+        duck.phase = 'swimming';
+        duck.x = duck.jumpTargetX;
+        duck.y = b.waterTop;
+        duck.facingRight = true;
+        duck.speed = 0.15;
+        duck.dirTimer = 5000 + Math.random() * 5000;
+        duck.shoreTimer = 45000 + Math.random() * 35000; // next trip in 45-80s
+        duck.headDipTimer = 10000 + Math.random() * 5000;
+        duck.honkTimer = 10000 + Math.random() * 10000;
+
+        // Snap duckling positions to water near mother
+        for (let i = 0; i < duck.ducklings.length; i++) {
+          duck.ducklingPositions[i].x = duck.x - (8 + i * 6);
+          duck.ducklingPositions[i].y = b.waterTop;
+        }
+      } else {
+        // Parabolic arc
+        const p = duck.jumpProgress;
+        duck.x = duck.jumpStartX + (duck.jumpTargetX - duck.jumpStartX) * p;
+        duck.y = duck.jumpStartY + (duck.jumpTargetY - duck.jumpStartY) * p - Math.sin(p * Math.PI) * 8;
+      }
+
+      // Ducklings jump in too with slight delay
+      for (let i = 0; i < duck.ducklings.length; i++) {
+        const pos = duck.ducklingPositions[i];
+        const delay = (i + 1) * 0.15;
+        const ducklingP = Math.max(0, Math.min(1, (duck.jumpProgress - delay) / (1 - delay)));
+        if (ducklingP > 0 && ducklingP < 1) {
+          const startX = duck.jumpStartX - (8 + i * 6) * (duck.facingRight ? -1 : 1);
+          const targetX = duck.jumpTargetX - (8 + i * 6);
+          pos.x = startX + (targetX - startX) * ducklingP;
+          pos.y = duck.jumpStartY + (b.waterTop - duck.jumpStartY) * ducklingP - Math.sin(ducklingP * Math.PI) * 5;
+        } else if (ducklingP >= 1) {
+          pos.y = b.waterTop;
+        }
+      }
+      break;
     }
   }
+}
 
-  // Move
+function updateDucklingPositions(dt: number, waterY: number) {
+  if (!duck) return;
   const dir = duck.facingRight ? 1 : -1;
-  duck.x += dir * duck.speed * (dt / 16);
-
-  // Bounce at bounds
-  const minX = b.left + 20;
-  const maxX = b.right - 20;
-  if (duck.x < minX) { duck.x = minX; duck.facingRight = true; }
-  if (duck.x > maxX) { duck.x = maxX; duck.facingRight = false; }
-
-  // Ripples while moving
-  if (!night && duck.speed > 0.05 && t - duck.lastRipple > 2000) {
-    spawnRipple(duck.x, duck.y);
-    duck.lastRipple = t;
-  }
-
-  // Update duckling positions — follow with delay
   for (let i = 0; i < duck.ducklings.length; i++) {
     const dl = duck.ducklings[i];
     dl.bobPhase += dt * 0.004;
     const targetX = duck.x + dl.offsetX * dir;
-    const targetY = b.waterTop;
-    // Smooth follow
     const pos = duck.ducklingPositions[i];
     pos.x += (targetX - pos.x) * 0.02 * (dt / 16);
-    pos.y = targetY;
+    pos.y = waterY;
   }
 }
 
@@ -145,10 +363,15 @@ export function getDuckX(): number | null {
 
 export function drawDucks(ctx: CanvasRenderingContext2D, t: number) {
   if (!duck) return;
+  if (duck.phase === 'offscreen') return; // nothing to draw
 
   const night = isNighttime(t);
-  const bob = Math.sin(duck.bobPhase) * 0.5;
+  const bob = (duck.phase === 'swimming' || duck.phase === 'walking_to_shore')
+    ? Math.sin(duck.bobPhase) * 0.5
+    : 0;
   const dir = duck.facingRight ? 1 : -1;
+  const onLand = duck.phase === 'climbing_out' || duck.phase === 'walking_offscreen' || duck.phase === 'walking_back';
+  const jumping = duck.phase === 'jumping_in';
 
   // --- Mother duck ---
   ctx.save();
@@ -173,9 +396,9 @@ export function drawDucks(ctx: CanvasRenderingContext2D, t: number) {
   ctx.ellipse(4, -3.5, 2.5, 2, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // Head dip animation
+  // Head dip animation (only while swimming)
   let headOffY = 0;
-  if (duck.headDipping) {
+  if (duck.headDipping && duck.phase === 'swimming') {
     const dipProgress = (t - duck.headDipStart) / 600;
     headOffY = Math.sin(dipProgress * Math.PI) * 3;
   }
@@ -215,10 +438,22 @@ export function drawDucks(ctx: CanvasRenderingContext2D, t: number) {
   ctx.closePath();
   ctx.fill();
 
+  // Legs (visible when on land or jumping)
+  if (onLand || jumping) {
+    const legSwing = onLand ? Math.sin(duck.walkCycle) * 1.5 : 0;
+    ctx.fillStyle = '#E89030';
+    // Left leg
+    ctx.fillRect(-1 - legSwing, 0, 1, 2.5);
+    ctx.fillRect(-2 - legSwing, 2.5, 2, 0.5); // foot
+    // Right leg
+    ctx.fillRect(1 + legSwing, 0, 1, 2.5);
+    ctx.fillRect(0 + legSwing, 2.5, 2, 0.5); // foot
+  }
+
   ctx.restore();
 
-  // Honk bubble
-  if (t < duck.honkUntil) {
+  // Honk bubble (only when swimming)
+  if (duck.phase === 'swimming' && t < duck.honkUntil) {
     const honkAlpha = Math.max(0, 1 - (t - (duck.honkUntil - 800)) / 800);
     ctx.save();
     ctx.globalAlpha = honkAlpha;
@@ -238,7 +473,8 @@ export function drawDucks(ctx: CanvasRenderingContext2D, t: number) {
   for (let i = 0; i < duck.ducklings.length; i++) {
     const dl = duck.ducklings[i];
     const pos = duck.ducklingPositions[i];
-    const dlBob = Math.sin(dl.bobPhase) * 0.4;
+    const inWater = duck.phase === 'swimming' || duck.phase === 'walking_to_shore';
+    const dlBob = inWater ? Math.sin(dl.bobPhase) * 0.4 : 0;
 
     ctx.save();
     ctx.translate(pos.x, pos.y + dlBob);
@@ -272,6 +508,14 @@ export function drawDucks(ctx: CanvasRenderingContext2D, t: number) {
       ctx.beginPath();
       ctx.arc(2.5, -3, 0.3, 0, Math.PI * 2);
       ctx.fill();
+    }
+
+    // Duckling legs on land
+    if (onLand || jumping) {
+      const legSwing = onLand ? Math.sin(duck.walkCycle + i * 1.2) * 1 : 0;
+      ctx.fillStyle = '#E89030';
+      ctx.fillRect(-0.5 - legSwing, -0.2, 0.7, 1.5);
+      ctx.fillRect(0.5 + legSwing, -0.2, 0.7, 1.5);
     }
 
     ctx.restore();
