@@ -24,6 +24,7 @@ import { updateButterflies, drawFlowers, drawButterflies } from './butterflies.t
 import { updateDucks, drawDucks } from './ducks.ts';
 import { updateTadpoles, drawTadpoles } from './tadpoles.ts';
 import { createBaitState, handleBaitClick, drawBaitToggle } from './bait.ts';
+import { createKrakenState, handleDinoEyeClick, updateKraken, drawKraken } from './kraken.ts';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
@@ -50,6 +51,7 @@ const fishingState = createFishingState();
 const shop = createShop();
 const settings = createSettings();
 const baitState = createBaitState();
+const krakenState = createKrakenState();
 
 // Mouse down: start charging cast (above water) or prepare to drop food (in water)
 let mouseDownY = 0;
@@ -84,6 +86,9 @@ canvas.addEventListener('mousedown', (e) => {
   if (heron.state === 'hovering' || heron.state === 'diving') {
     scareHeron(heron, lastTime);
   }
+
+  // Click dino eye socket — kraken easter egg
+  if (handleDinoEyeClick(krakenState, x, y, W, H, lastTime, fish, bounds)) { clickConsumedByUI = true; return; }
 
   // Click on fisherman — easter egg reaction
   const fmPos = getPondBounds(W, H);
@@ -332,6 +337,7 @@ function loop(rawT: number) {
   updateHeron(heron, bounds, t, dt, fish);
   updateBoneParticles(dt);
   updateFishing(fishingState, bounds, t, dt, fish, turtle, W, H, chest, catfish, baitState.enabled);
+  updateKraken(krakenState, t, dt, bounds);
   updateFishermanEasterEggs(fishingState, bounds, t, dt, W, H);
   updateWeather(dt, t, W, H);
 
@@ -346,6 +352,7 @@ function loop(rawT: number) {
   drawCatfish(ctx, catfish, t);
   drawBoneParticles(ctx);
 
+  drawKraken(ctx, krakenState, t, bounds);
   drawPellets(ctx);
   drawBubbles(ctx);
   drawSplashes(ctx);

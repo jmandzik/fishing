@@ -63,7 +63,7 @@ function getBowlPoints(b: PondBounds, inset: number): { x: number; y: number }[]
   return rawPoints;
 }
 
-function drawBowlPath(ctx: CanvasRenderingContext2D, b: PondBounds, inset: number) {
+export function drawBowlPath(ctx: CanvasRenderingContext2D, b: PondBounds, inset: number) {
   const points = getBowlPoints(b, inset);
   const left = b.left + inset;
   const right = b.right + inset;
